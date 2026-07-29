@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>양도소득세 계산기 (2026)</title>
+<style>
+:root{
+  color-scheme: light dark;
+  --blue:#2563eb; --blue-d:#1d4ed8; --accent:#4f46e5;
+  --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#f4f6fb; --card:#fff;
+  --green:#059669; --orange:#d97706; --red:#dc2626;
+  --note-bg:#eff6ff; --note-ink:#334155;
+  --mini-bg:#eef2ff; --mini-border:#c7d2fe;
+  --ai-bg:#f8fafc; --input-bg:#fff; --step-line:#f1f5f9; --warn-bg:#fef9c3;
+  --answer-ink:#0f172a; --tip-bg:#111827; --tip-ink:#fff;
+  --badge-exempt-bg:#d1fae5; --badge-exempt-ink:#059669;
+  --badge-partial-bg:#ffedd5; --badge-partial-ink:#b45309;
+  --badge-tax-bg:#dbeafe; --badge-tax-ink:#1d4ed8;
+  --shadow:0 4px 20px rgba(30,50,90,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --blue:#3b82f6; --blue-d:#93c5fd; --accent:#818cf8;
+    --ink:#e5e7eb; --muted:#9ca3af; --line:#374151; --bg:#0f172a; --card:#1e293b;
+    --green:#34d399; --orange:#fbbf24; --red:#f87171;
+    --note-bg:#172554; --note-ink:#cbd5e1;
+    --mini-bg:#312e81; --mini-border:#4338ca;
+    --ai-bg:#172033; --input-bg:#0f172a; --step-line:#334155; --warn-bg:#3f2d0a;
+    --answer-ink:#e2e8f0; --tip-bg:#020617; --tip-ink:#f8fafc;
+    --badge-exempt-bg:#064e3b; --badge-exempt-ink:#6ee7b7;
+    --badge-partial-bg:#4a2a09; --badge-partial-ink:#fdba74;
+    --badge-tax-bg:#1e3a8a; --badge-tax-ink:#bfdbfe;
+    --shadow:0 4px 20px rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  --blue:#3b82f6; --blue-d:#93c5fd; --accent:#818cf8;
+  --ink:#e5e7eb; --muted:#9ca3af; --line:#374151; --bg:#0f172a; --card:#1e293b;
+  --green:#34d399; --orange:#fbbf24; --red:#f87171;
+  --note-bg:#172554; --note-ink:#cbd5e1;
+  --mini-bg:#312e81; --mini-border:#4338ca;
+  --ai-bg:#172033; --input-bg:#0f172a; --step-line:#334155; --warn-bg:#3f2d0a;
+  --answer-ink:#e2e8f0; --tip-bg:#020617; --tip-ink:#f8fafc;
+  --badge-exempt-bg:#064e3b; --badge-exempt-ink:#6ee7b7;
+  --badge-partial-bg:#4a2a09; --badge-partial-ink:#fdba74;
+  --badge-tax-bg:#1e3a8a; --badge-tax-ink:#bfdbfe;
+  --shadow:0 4px 20px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{overflow-x:hidden}
+body{margin:0;font-family:"Malgun Gothic","맑은 고딕",system-ui,-apple-system,sans-serif;
+  background:var(--bg);color:var(--ink);line-height:1.55;font-size:17px}
+.topbar{background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;padding:26px 20px;text-align:center}
+.topbar h1{margin:0;font-size:28px}
+.topbar .sub{margin:6px 0 0;opacity:.92;font-size:15px}
+.wrap{max-width:760px;margin:22px auto;padding:0 16px}
+.card{background:var(--card);border-radius:16px;box-shadow:var(--shadow);padding:24px;margin-bottom:20px}
+h2{font-size:19px;margin:18px 0 12px;border-left:5px solid var(--blue);padding-left:10px}
+h2:first-child{margin-top:0}
+h2 small{color:var(--muted);font-weight:400;font-size:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px}
+@media(max-width:560px){.grid{grid-template-columns:1fr}}
+label{display:flex;flex-direction:column;gap:5px;font-weight:600;font-size:15px;position:relative}
+label.chk{flex-direction:row;align-items:center;gap:8px;font-weight:600}
+input,select{font-size:17px;padding:11px 12px;border:1.5px solid var(--line);border-radius:10px;
+  font-family:inherit;background:var(--input-bg);color:var(--ink);width:100%}
+input:focus,select:focus{outline:none;border-color:var(--blue)}
+input[type=checkbox]{width:20px;height:20px;flex:none}
+.row{display:flex;gap:6px}
+.hint{color:var(--blue);font-weight:600;font-size:13px;min-height:16px}
+.note{background:var(--note-bg);border-radius:10px;padding:10px 12px;font-size:14px;color:var(--note-ink);margin:12px 0 0}
+.mini{background:var(--mini-bg);border:1px solid var(--mini-border);color:var(--blue-d);border-radius:8px;
+  padding:0 10px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.expenses{margin-top:18px;border:1.5px dashed var(--line);border-radius:12px;padding:6px 14px}
+.expenses summary{cursor:pointer;font-weight:700;padding:8px 0;font-size:16px}
+.expenses small{color:var(--muted);font-weight:400}
+.tip{display:inline-flex;width:19px;height:19px;border-radius:50%;background:var(--muted);color:#fff;
+  font-size:12px;align-items:center;justify-content:center;cursor:help;flex:none}
+.tip:hover::after{content:attr(data-tip);position:absolute;left:0;top:100%;margin-top:6px;z-index:9;
+  background:var(--tip-bg);color:var(--tip-ink);padding:8px 11px;border-radius:8px;font-size:13px;font-weight:400;
+  width:230px;box-shadow:var(--shadow)}
+.primary{width:100%;margin-top:22px;background:var(--blue);color:#fff;border:none;border-radius:12px;
+  padding:16px;font-size:19px;font-weight:800;cursor:pointer;font-family:inherit}
+.primary:hover{background:var(--blue-d)}
+.hidden{display:none}
+/* 결과 */
+.badge{display:inline-block;padding:6px 14px;border-radius:999px;font-weight:800;font-size:15px;margin-bottom:8px}
+.badge.b-비과세{background:var(--badge-exempt-bg);color:var(--badge-exempt-ink)}
+.badge.b-일부과세{background:var(--badge-partial-bg);color:var(--badge-partial-ink)}
+.badge.b-과세{background:var(--badge-tax-bg);color:var(--badge-tax-ink)}
+.bigtax{text-align:center;padding:14px 0 20px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.bigtax span{display:block;color:var(--muted);font-size:15px}
+.bigtax strong{display:block;font-size:40px;color:var(--blue-d);margin:4px 0;letter-spacing:-1px;word-break:break-all}
+.bigtax em{color:var(--muted);font-style:normal;font-size:14px}
+.table-wrap{overflow-x:auto}
+.steps{width:100%;border-collapse:collapse;font-size:15px}
+.steps td{padding:9px 4px;border-bottom:1px solid var(--step-line)}
+.steps td:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap;padding-left:14px}
+.steps .minus td:last-child{color:var(--red)}
+.steps .total td{font-size:18px;font-weight:800;border-top:2px solid var(--ink);border-bottom:none;padding-top:12px}
+.steps .stepnote{display:block;color:var(--muted);font-weight:400;font-size:12px}
+.warns{margin-top:14px}
+.warns .w{background:var(--warn-bg);border-left:4px solid var(--orange);padding:9px 12px;border-radius:8px;
+  font-size:14px;margin-top:8px}
+/* AI (정적 안내) */
+.ai{margin-top:22px;background:var(--ai-bg);border-radius:12px;padding:16px}
+.ai h3{margin:0 0 10px;font-size:17px}
+.ai .aiinfo{font-size:14px;color:var(--muted);background:var(--note-bg);border-radius:10px;padding:12px 14px}
+.disclaimer{color:var(--muted);font-size:12.5px;margin:14px 0 0;text-align:center}
+/* 필요경비 빌더 */
+.exp-builder{margin-top:6px}
+.exp-row{display:flex;gap:6px;flex-wrap:wrap}
+.exp-row select{flex:1 1 46%;min-width:150px}
+.exp-row #exp_amount{flex:1 1 30%;min-width:120px}
+#expAutoBroker{margin-top:8px}
+.exp-list{list-style:none;margin:12px 0 0;padding:0}
+.exp-list li{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:9px;margin-bottom:6px;font-size:14px}
+.exp-list li span{flex:1}
+.exp-list li b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.exp-list li button{background:none;border:none;color:var(--red);font-size:16px;cursor:pointer;padding:0 4px}
+.exp-total{margin-top:10px;text-align:right;font-size:15px;color:var(--muted)}
+.exp-total strong{color:var(--ink);font-size:18px;margin-left:6px;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <h1>🏠 양도소득세 계산기</h1>
+  <p class="sub">부동산 매매 후 세금, 어렵지 않게 계산해 드려요 · <b>2026년 기준</b> · 브라우저에서 바로 계산(오프라인)</p>
+</header>
+
+<main class="wrap">
+  <!-- 입력 -->
+  <section class="card" id="formCard">
+    <h2>1. 기본 정보</h2>
+    <div class="grid">
+      <label>어떤 자산인가요?
+        <select id="asset_type">
+          <option value="주택" selected>주택 (아파트·빌라 등)</option>
+          <option value="조합원입주권">조합원입주권</option>
+        </select>
+      </label>
+      <label class="chk"><input type="checkbox" id="is_registered" checked> 등기된 주택이에요
+        <span class="tip" data-tip="미등기로 팔면 세율 70% + 각종 공제가 사라져요">?</span>
+      </label>
+      <label>판 금액 (양도가액)
+        <input type="text" id="transfer_price" class="money" inputmode="numeric" placeholder="예: 1,500,000,000">
+        <small class="hint" id="transfer_price_h"></small>
+      </label>
+      <label>산 금액 (취득가액)
+        <input type="text" id="acquisition_price" class="money" inputmode="numeric" placeholder="예: 900,000,000">
+        <small class="hint" id="acquisition_price_h"></small>
+      </label>
+      <label>산 날짜 (취득일)
+        <input type="date" id="acquisition_date">
+      </label>
+      <label>판 날짜 (양도일)
+        <input type="date" id="transfer_date" value="2026-07-29">
+      </label>
+      <label>실제 거주한 기간 (년)
+        <input type="number" id="residence_years" min="0" step="1" value="0" placeholder="0">
+        <span class="tip" data-tip="1세대1주택 장기보유공제 최대 80%·비과세 거주요건에 쓰여요">?</span>
+      </label>
+    </div>
+
+    <h2>2. 주택 상황 <small>(비과세 판정)</small></h2>
+    <div class="grid">
+      <label>보유 주택 수 (세대 기준)
+        <select id="household_house_count">
+          <option value="1" selected>1주택</option>
+          <option value="2">2주택</option>
+          <option value="3">3주택 이상</option>
+        </select>
+      </label>
+      <label class="chk"><input type="checkbox" id="is_one_household_one_house" checked> 1세대 1주택이에요
+        <span class="tip" data-tip="1세대가 국내에 집 1채. 요건 채우면 12억까지 비과세">?</span>
+      </label>
+      <label class="chk"><input type="checkbox" id="is_adjusted_area_at_acquisition"> 살 때 조정대상지역이었어요
+        <span class="tip" data-tip="조정지역에서 산 집은 '2년 이상 거주'해야 비과세돼요">?</span>
+      </label>
+    </div>
+
+    <details class="expenses" open>
+      <summary>3. 필요경비 입력 <small>(공제 항목을 골라 추가 — 세금이 줄어요)</small></summary>
+      <div class="exp-builder">
+        <div class="exp-row">
+          <select id="exp_type">
+            <optgroup label="취득 관련">
+              <option value="취득세·등록면허세">취득세·등록면허세</option>
+              <option value="법무사 수수료(취득·등기)">법무사 수수료(취득·등기)</option>
+              <option value="취득 시 중개수수료" data-broker="acq">취득 시 중개수수료</option>
+              <option value="인지세·신고 대행료">인지세·신고 대행료</option>
+            </optgroup>
+            <optgroup label="자본적지출 (가치 상승·수명 연장)">
+              <option value="발코니·베란다 확장공사">발코니·베란다 확장공사</option>
+              <option value="샷시(새시) 설치·교체">샷시(새시) 설치·교체</option>
+              <option value="구조 변경(방·거실 등)">구조 변경(방·거실 등)</option>
+              <option value="보일러 교체(수선 제외)">보일러 교체(수선 제외)</option>
+              <option value="시스템에어컨 설치">시스템에어컨 설치</option>
+              <option value="상·하수도 배관 공사">상·하수도 배관 공사</option>
+              <option value="난방시설 교체">난방시설 교체</option>
+              <option value="방범창·방충망 설치">방범창·방충망 설치</option>
+              <option value="내진 보강공사">내진 보강공사</option>
+            </optgroup>
+            <optgroup label="양도 관련">
+              <option value="양도 시 중개수수료" data-broker="transfer">양도 시 중개수수료</option>
+              <option value="양도세 신고 수수료(세무사)">양도세 신고 수수료(세무사)</option>
+              <option value="매매계약 인지세">매매계약 인지세</option>
+            </optgroup>
+          </select>
+          <input type="text" id="exp_amount" class="money" inputmode="numeric" placeholder="금액(원)">
+          <button type="button" class="mini" id="expAddBtn">＋ 추가</button>
+        </div>
+        <button type="button" class="mini" id="expAutoBroker" style="display:none">중개수수료 자동계산</button>
+        <ul class="exp-list" id="expList"></ul>
+        <div class="exp-total">필요경비 합계<strong id="expTotal">0원</strong></div>
+      </div>
+      <p class="note">💡 <b>인정</b>: 취득세·중개수수료·법무사비·자본적지출(확장·샷시·보일러 교체 등). <b>제외</b>: 도배·장판·싱크대 교체, 정기 수리·보수, 대출이자, 재산세 등 보유세. 실제 지출 + 증빙 필요.</p>
+    </details>
+
+    <button id="calcBtn" class="primary">세금 계산하기</button>
+  </section>
+
+  <!-- 결과 -->
+  <section class="card result hidden" id="resultCard">
+    <div class="badge" id="statusBadge"></div>
+    <div class="bigtax">
+      <span>예상 총 납부세액</span>
+      <strong id="totalTax">-</strong>
+      <em id="taxDetail"></em>
+    </div>
+    <div class="table-wrap"><table class="steps" id="stepsTable"></table></div>
+    <div class="warns" id="warns"></div>
+
+    <!-- AI 보조 (정적 안내) -->
+    <div class="ai">
+      <h3>🤖 AI 도우미</h3>
+      <div class="aiinfo">이 기능은 <b>로컬 설치 버전(Ollama 연동)</b>에서 이용 가능합니다. 지금 보고 계신 웹 버전은 세금 계산 기능만 제공합니다.</div>
+      <p class="disclaimer">이 계산은 참고용이에요. 실제 신고 전엔 세무사·국세청(126) 상담을 권해요.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+// ══════════════════════════════════════════════════════════════════════
+//  결정론 엔진 — rates.py + calc.py 를 바닐라 JS로 정확 이식.
+//  통화 곱셈은 정수분수 + BigInt floor 로 파이썬 Decimal/int() 결과와 원단위 일치.
+//  (Node 골든벡터 7종 전수 통과 — S1~S6 + 미등기)
+// ══════════════════════════════════════════════════════════════════════
+const HIGH_VALUE_THRESHOLD = 1200000000;
+const BASIC_DEDUCTION = 2500000;
+const HOUSE_TYPES = ["주택", "조합원입주권"];
+
+// (상한, [분자,분모], 누진공제) — 마지막 상한은 null(무한대)
+const BASIC_RATE_BRACKETS = [
+  [14000000,   [6, 100],  0],
+  [50000000,   [15, 100], 1260000],
+  [88000000,   [24, 100], 5760000],
+  [150000000,  [35, 100], 15440000],
+  [300000000,  [38, 100], 19940000],
+  [500000000,  [40, 100], 25940000],
+  [1000000000, [42, 100], 35940000],
+  [null,       [45, 100], 65940000],
+];
+
+// mul(amount,[num,den]) = floor(amount*num/den). 파이썬 int(Decimal(amount)*rate)와 일치(양수).
+function mul(amount, frac) {
+  const num = frac[0], den = frac[1];
+  return Number((BigInt(Math.trunc(amount)) * BigInt(num)) / BigInt(den));
+}
+// 10원 미만 절사(음수는 0)
+function roundDown(amount, unit) {
+  unit = unit || 10;
+  if (amount <= 0) return 0;
+  return Math.floor(Math.trunc(amount) / unit) * unit;
+}
+function comma(n) { return Number(n || 0).toLocaleString("ko-KR"); }
+
+// 만(滿) 연수(기념일 기준)
+function fullYears(start, end) {
+  const s = start.split("-").map(Number), e = end.split("-").map(Number);
+  const sNum = s[0] * 10000 + s[1] * 100 + s[2];
+  const eNum = e[0] * 10000 + e[1] * 100 + e[2];
+  if (eNum <= sNum) return 0;
+  let years = e[0] - s[0];
+  if (e[1] * 100 + e[2] < s[1] * 100 + s[2]) years -= 1;
+  return Math.max(0, years);
+}
+
+// 누진 기본세율. 반환 {tax(절사 전), ratePct, deduct}
+function progressiveTax(taxBase) {
+  if (taxBase <= 0) return { tax: 0, ratePct: 0, deduct: 0 };
+  for (const b of BASIC_RATE_BRACKETS) {
+    const upper = b[0], frac = b[1], deduct = b[2];
+    if (upper === null || taxBase <= upper) {
+      return { tax: mul(taxBase, frac) - deduct, ratePct: frac[0], deduct: deduct };
+    }
+  }
+  const last = BASIC_RATE_BRACKETS[BASIC_RATE_BRACKETS.length - 1];
+  return { tax: mul(taxBase, last[1]) - last[2], ratePct: last[1][0], deduct: last[2] };
+}
+
+// 장특공 표1 공제율(%): 3년미만 0, 연2% 최대30%(15년)
+function ltsdTable1Pct(holdingYears) {
+  if (holdingYears < 3) return 0;
+  return Math.min(Math.min(holdingYears, 15) * 2, 30);
+}
+// 장특공 표2 공제율(%): 보유분(연4%,≤40)+거주분(연4%,≤40), 합산 ≤80
+function ltsdTable2Pct(holdingYears, residenceYears) {
+  const hold = Math.min(Math.min(holdingYears, 10) * 4, 40);
+  const live = Math.min(Math.min(residenceYears, 10) * 4, 40);
+  return Math.min(hold + live, 80);
+}
+
+// 1세대1주택 비과세 판정 → {status, warns}
+function judgeExemption(inp, holdingYears, residenceYears) {
+  const warns = [];
+  if (!inp.is_one_household_one_house) return { status: "과세", warns: warns };
+  if (holdingYears < 2) {
+    warns.push("보유 " + holdingYears + "년: 1세대1주택 비과세 보유요건(2년) 미충족 → 과세");
+    return { status: "과세", warns: warns };
+  }
+  if (inp.is_adjusted_area_at_acquisition && residenceYears < 2) {
+    warns.push("취득 당시 조정대상지역 + 거주 2년 미만 → 비과세 불가(과세)");
+    return { status: "과세", warns: warns };
+  }
+  if (inp.transfer_price <= HIGH_VALUE_THRESHOLD) return { status: "비과세", warns: warns };
+  warns.push("양도가액 12억 초과 고가주택: 12억 초과분만 과세(안분)");
+  return { status: "일부과세", warns: warns };
+}
+
+// 장특공 → {table, pct, amount}
+function ltsd(inp, holdingYears, residenceYears, taxableGain) {
+  if (!inp.is_registered) return { table: "없음(미등기 배제)", pct: 0, amount: 0 };
+  if (holdingYears < 3) return { table: "없음(보유3년미만)", pct: 0, amount: 0 };
+  const eligibleTable2 =
+    inp.is_one_household_one_house && residenceYears >= 2 && inp.asset_type === "주택";
+  if (eligibleTable2) {
+    const pct = ltsdTable2Pct(holdingYears, residenceYears);
+    return { table: "표2(1세대1주택)", pct: pct, amount: mul(taxableGain, [pct, 100]) };
+  }
+  const pct = ltsdTable1Pct(holdingYears);
+  return { table: "표1(일반)", pct: pct, amount: mul(taxableGain, [pct, 100]) };
+}
+
+// 세율 적용 → {tax, desc}. 미등기→70%, 단기(주택)→비교과세, 그 외 기본세율.
+function taxByRate(inp, taxBase, holdingYears) {
+  if (taxBase <= 0) return { tax: 0, desc: "과세표준 0" };
+  if (!inp.is_registered) {
+    return { tax: roundDown(mul(taxBase, [70, 100])), desc: "미등기양도자산 70% 단일세율" };
+  }
+  if (HOUSE_TYPES.indexOf(inp.asset_type) !== -1 && holdingYears < 2) {
+    const shortFrac = holdingYears < 1 ? [70, 100] : [60, 100];
+    const shortTax = mul(taxBase, shortFrac);
+    const basic = progressiveTax(taxBase).tax;
+    if (shortTax >= basic) {
+      const band = holdingYears < 1 ? "1년 미만 70%" : "1~2년 60%";
+      return { tax: roundDown(shortTax), desc: "단기 " + band + "(비교과세 채택)" };
+    }
+    return { tax: roundDown(basic), desc: "기본세율(비교과세: 단기보다 큼)" };
+  }
+  const p = progressiveTax(taxBase);
+  return { tax: roundDown(p.tax), desc: "기본세율 " + p.ratePct + "%(누진공제 " + comma(p.deduct) + "원)" };
+}
+
+function necessaryExpenses(inp) {
+  return (inp.acquisition_tax || 0) + (inp.broker_fee_acq || 0) + (inp.legal_fee || 0)
+    + (inp.capital_expenditure || 0) + (inp.broker_fee_transfer || 0) + (inp.other_transfer_cost || 0);
+}
+
+// 전체 계산
+function calculate(raw) {
+  const inp = {
+    asset_type: raw.asset_type != null ? raw.asset_type : "주택",
+    is_registered: raw.is_registered != null ? raw.is_registered : true,
+    transfer_price: raw.transfer_price || 0,
+    acquisition_price: raw.acquisition_price || 0,
+    acquisition_date: raw.acquisition_date,
+    transfer_date: raw.transfer_date,
+    residence_months: raw.residence_months || 0,
+    acquisition_tax: raw.acquisition_tax || 0,
+    broker_fee_acq: raw.broker_fee_acq || 0,
+    legal_fee: raw.legal_fee || 0,
+    capital_expenditure: raw.capital_expenditure || 0,
+    broker_fee_transfer: raw.broker_fee_transfer || 0,
+    other_transfer_cost: raw.other_transfer_cost || 0,
+    household_house_count: raw.household_house_count || 1,
+    is_one_household_one_house: raw.is_one_household_one_house != null ? raw.is_one_household_one_house : true,
+    is_adjusted_area_at_acquisition: raw.is_adjusted_area_at_acquisition != null ? raw.is_adjusted_area_at_acquisition : false,
+    prior_basic_deduction_used: raw.prior_basic_deduction_used || 0,
+  };
+
+  const holdingYears = fullYears(inp.acquisition_date, inp.transfer_date);
+  const residenceYears = Math.floor(inp.residence_months / 12);
+  const expenses = necessaryExpenses(inp);
+  const capitalGain = inp.transfer_price - inp.acquisition_price - expenses;
+
+  const j = judgeExemption(inp, holdingYears, residenceYears);
+  let status = j.status;
+  const warns = j.warns;
+
+  if (inp.household_house_count > 1) {
+    warns.push("다주택: 조정지역 중과(2026-05-10 부활)는 Phase 2 미반영 — 현 결과는 1주택 기준");
+  }
+  if (!inp.is_registered) {
+    warns.push("미등기양도자산: 장특공·기본공제 배제 + 70% 중과");
+  }
+
+  // 비과세 또는 차익 없음 → 세액 0
+  if (status === "비과세" || capitalGain <= 0) {
+    const note = status === "비과세" ? "1세대1주택 비과세(양도가 12억 이하)" : "양도차익 없음";
+    const steps0 = [
+      { label: "양도가액", amount: inp.transfer_price, note: "" },
+      { label: "취득가액", amount: inp.acquisition_price, note: "" },
+      { label: "필요경비", amount: expenses, note: "" },
+      { label: "양도차익", amount: Math.max(capitalGain, 0), note: "" },
+    ];
+    return {
+      exemption_status: status === "비과세" ? "비과세" : "과세",
+      capital_gain: capitalGain, taxable_capital_gain: 0,
+      ltsd_table: "없음", ltsd_rate: 0, ltsd_amount: 0,
+      taxable_income: 0, basic_deduction: 0, tax_base: 0,
+      applied_rate_desc: note, calculated_tax: 0, local_income_tax: 0,
+      total_tax: 0, after_tax_gain: Math.max(capitalGain, 0),
+      holding_years: holdingYears, residence_years: residenceYears,
+      steps: steps0, warnings: warns,
+    };
+  }
+
+  // 고가주택 안분(일부과세) — BigInt 정수연산(오버플로 방지)
+  let taxableGain;
+  if (status === "일부과세") {
+    const excess = inp.transfer_price - HIGH_VALUE_THRESHOLD;
+    taxableGain = Number((BigInt(capitalGain) * BigInt(excess)) / BigInt(inp.transfer_price));
+    const ratio = excess / inp.transfer_price;
+    warns.push("고가주택 안분율 " + (ratio * 100).toFixed(2) + "% (=(양도가−12억)/양도가) 적용");
+  } else {
+    taxableGain = capitalGain;
+  }
+
+  const L = ltsd(inp, holdingYears, residenceYears, taxableGain);
+  const taxableIncome = taxableGain - L.amount;
+
+  let basicDeduction;
+  if (inp.is_registered) {
+    const available = Math.max(0, BASIC_DEDUCTION - inp.prior_basic_deduction_used);
+    basicDeduction = Math.min(available, Math.max(0, taxableIncome));
+  } else {
+    basicDeduction = 0;
+  }
+  const taxBase = Math.max(0, taxableIncome - basicDeduction);
+
+  const T = taxByRate(inp, taxBase, holdingYears);
+  const calculatedTax = T.tax;
+  const localTax = roundDown(mul(calculatedTax, [10, 100]));
+  const totalTax = calculatedTax + localTax;
+
+  const steps = [
+    { label: "양도가액", amount: inp.transfer_price, note: "" },
+    { label: "취득가액", amount: inp.acquisition_price, note: "" },
+    { label: "필요경비", amount: expenses, note: "" },
+    { label: "양도차익", amount: capitalGain, note: "" },
+    { label: "과세대상 양도차익", amount: taxableGain, note: status === "일부과세" ? "고가주택 안분" : "전액 과세" },
+    { label: "장기보유특별공제(" + L.table + " " + L.pct + "%)", amount: -L.amount, note: "" },
+    { label: "양도소득금액", amount: taxableIncome, note: "" },
+    { label: "기본공제", amount: -basicDeduction, note: "" },
+    { label: "과세표준", amount: taxBase, note: "" },
+    { label: "산출세액", amount: calculatedTax, note: T.desc },
+    { label: "지방소득세(10%)", amount: localTax, note: "" },
+    { label: "총부담세액", amount: totalTax, note: "" },
+  ];
+
+  return {
+    exemption_status: status,
+    capital_gain: capitalGain, taxable_capital_gain: taxableGain,
+    ltsd_table: L.table, ltsd_rate: L.pct, ltsd_amount: L.amount,
+    taxable_income: taxableIncome, basic_deduction: basicDeduction, tax_base: taxBase,
+    applied_rate_desc: T.desc, calculated_tax: calculatedTax,
+    local_income_tax: localTax, total_tax: totalTax,
+    after_tax_gain: capitalGain - totalTax,
+    holding_years: holdingYears, residence_years: residenceYears,
+    steps: steps, warnings: warns,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  UI (index.html/app.js 재현) — 계산은 위 로컬 엔진만 사용(외부요청 0)
+// ══════════════════════════════════════════════════════════════════════
+const $ = function (id) { return document.getElementById(id); };
+let lastResult = null;
+
+// 금액 입력: 콤마 자동 서식
+function digits(s) { return (s || "").replace(/[^0-9]/g, ""); }
+document.querySelectorAll(".money").forEach(function (el) {
+  el.addEventListener("input", function () {
+    const d = digits(el.value);
+    el.value = d ? comma(d) : "";
+    const h = $(el.id + "_h");
+    if (h) h.textContent = d ? korMoney(d) : "";
+  });
+});
+function val(id) { return parseInt(digits($(id).value) || "0", 10); }
+
+// 한글 금액(억/만원) 표기
+function korMoney(won) {
+  won = Number(won);
+  if (!won) return "";
+  const eok = Math.floor(won / 100000000);
+  const man = Math.floor((won % 100000000) / 10000);
+  let s = "";
+  if (eok) s += eok + "억 ";
+  if (man) s += comma(man) + "만 ";
+  s = (s || "0 ") + "원";
+  return "= " + s.trim();
+}
+
+// 중개보수 자동계산(2026 주택 매매 상한요율)
+function brokerFee(price) {
+  const t = [
+    [50000000, 0.006, 250000],
+    [200000000, 0.005, 800000],
+    [900000000, 0.004, null],
+    [1200000000, 0.005, null],
+    [1500000000, 0.006, null],
+    [Infinity, 0.007, null],
+  ];
+  for (let i = 0; i < t.length; i++) {
+    const upper = t[i][0], rate = t[i][1], cap = t[i][2];
+    if (price < upper) {
+      let fee = Math.floor(price * rate);
+      if (cap !== null) fee = Math.min(fee, cap);
+      return fee;
+    }
+  }
+  return 0;
+}
+// 필요경비 항목 빌더 — 드롭다운으로 공제 항목을 골라 추가
+let expItems = [];
+function expensesTotal() { return expItems.reduce(function (s, it) { return s + it.amount; }, 0); }
+function renderExp() {
+  $("expList").innerHTML = expItems.map(function (it, i) {
+    return '<li><span>' + esc(it.name) + '</span><b>' + comma(it.amount) + '원</b>'
+      + '<button type="button" data-exp-del="' + i + '" aria-label="삭제">✕</button></li>';
+  }).join("");
+  $("expTotal").textContent = comma(expensesTotal()) + "원";
+}
+$("expAddBtn").addEventListener("click", function () {
+  const name = $("exp_type").value;
+  const amt = parseInt(digits($("exp_amount").value) || "0", 10);
+  if (!amt) { alert("금액을 입력하세요."); return; }
+  expItems.push({ name: name, amount: amt });
+  $("exp_amount").value = "";
+  renderExp();
+});
+$("expList").addEventListener("click", function (e) {
+  const i = e.target.getAttribute("data-exp-del");
+  if (i !== null) { expItems.splice(parseInt(i, 10), 1); renderExp(); }
+});
+// 중개수수료 항목 선택 시 자동계산 버튼 노출
+$("exp_type").addEventListener("change", function () {
+  const opt = $("exp_type").selectedOptions[0];
+  const b = opt ? opt.getAttribute("data-broker") : null;
+  const btn = $("expAutoBroker");
+  if (b) { btn.style.display = "inline-block"; btn.dataset.broker = b; }
+  else { btn.style.display = "none"; }
+});
+$("expAutoBroker").addEventListener("click", function () {
+  const which = $("expAutoBroker").dataset.broker;
+  const price = which === "acq" ? val("acquisition_price") : val("transfer_price");
+  if (!price) { alert("먼저 " + (which === "acq" ? "취득" : "양도") + "금액을 입력하세요."); return; }
+  $("exp_amount").value = comma(brokerFee(price));
+});
+
+// 입력 수집
+function collect() {
+  return {
+    asset_type: $("asset_type").value,
+    is_registered: $("is_registered").checked,
+    transfer_price: val("transfer_price"),
+    acquisition_price: val("acquisition_price"),
+    acquisition_date: $("acquisition_date").value,
+    transfer_date: $("transfer_date").value,
+    residence_months: (parseInt($("residence_years").value || "0", 10)) * 12,
+    acquisition_tax: 0,
+    broker_fee_acq: 0,
+    legal_fee: 0,
+    capital_expenditure: expensesTotal(),
+    broker_fee_transfer: 0,
+    other_transfer_cost: 0,
+    household_house_count: parseInt($("household_house_count").value, 10),
+    is_one_household_one_house: $("is_one_household_one_house").checked,
+    is_adjusted_area_at_acquisition: $("is_adjusted_area_at_acquisition").checked,
+  };
+}
+
+// 계산(로컬 엔진 — 외부 호출 없음)
+$("calcBtn").addEventListener("click", function () {
+  const p = collect();
+  if (!p.transfer_price || !p.acquisition_price) { alert("판 금액과 산 금액을 입력하세요."); return; }
+  if (!p.acquisition_date || !p.transfer_date) { alert("취득일과 양도일을 입력하세요."); return; }
+  try {
+    lastResult = calculate(p);
+    render(lastResult);
+  } catch (e) {
+    alert("계산 실패: " + e.message);
+  }
+});
+
+// 결과 렌더
+function render(r) {
+  const badge = $("statusBadge");
+  badge.textContent = r.exemption_status;
+  badge.className = "badge b-" + r.exemption_status;
+  $("totalTax").textContent = comma(r.total_tax) + "원";
+  $("taxDetail").textContent =
+    "양도소득세 " + comma(r.calculated_tax) + "원 + 지방소득세 " + comma(r.local_income_tax) + "원" +
+    "  ·  예상 세후 차익 " + comma(r.after_tax_gain) + "원";
+
+  const rows = r.steps.map(function (s) {
+    const isTotal = s.label.indexOf("총부담세액") !== -1;
+    const isMinus = s.amount < 0;
+    const cls = isTotal ? "total" : (isMinus ? "minus" : "");
+    const amt = (isMinus ? "− " : "") + comma(Math.abs(s.amount)) + "원";
+    const note = s.note ? '<span class="stepnote">' + esc(s.note) + "</span>" : "";
+    return '<tr class="' + cls + '"><td>' + esc(s.label) + note + "</td><td>" + amt + "</td></tr>";
+  }).join("");
+  $("stepsTable").innerHTML = rows;
+
+  $("warns").innerHTML = (r.warnings || []).map(function (w) {
+    return '<div class="w">⚠️ ' + esc(w) + "</div>";
+  }).join("");
+  $("resultCard").classList.remove("hidden");
+  $("resultCard").scrollIntoView({ behavior: "smooth" });
+}
+
+// 안전 출력(엔진 문자열은 신뢰 가능하나 습관적으로 이스케이프)
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+  });
+}
+</script>
+</body>
+</html>
