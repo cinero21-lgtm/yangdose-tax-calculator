@@ -123,6 +123,13 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
 .exp-total{margin-top:10px;text-align:right;font-size:15px;color:var(--muted)}
 .exp-total strong{color:var(--ink);font-size:18px;margin-left:6px;font-variant-numeric:tabular-nums}
 </style>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#ea580c">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="양도세계산기">
 </head>
 <body>
 <header class="topbar">
@@ -642,5 +649,6 @@ function esc(s) {
   });
 }
 </script>
+<script>if("serviceWorker" in navigator){window.addEventListener("load",function(){navigator.serviceWorker.register("sw.js").catch(function(){});});}</script>
 </body>
 </html>
