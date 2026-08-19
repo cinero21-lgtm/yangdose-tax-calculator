@@ -68,12 +68,13 @@ chmod +x "$BOOT_DIR/photo-autobackup.sh"
 echo "  등록됨: $BOOT_DIR/photo-autobackup.sh"
 echo "  (Play스토어/F-Droid에서 'Termux:Boot' 앱을 설치하고 한 번 실행해야 부팅 시 동작한다)"
 
+say "이어서 자동 설정을 실행한다"
+"$BIN_DIR/photo-autobackup.sh" setup
+
 cat <<'NEXT'
 
---- 다음 순서 ---
-  1) 구글드라이브 연결:  rclone config     (references/android-setup.md 4단계 참고)
-  2) 상태 점검:          ~/bin/photo-autobackup.sh doctor
-  3) 안전 예행연습:      config.env 에 DRY_RUN=1 넣고  ~/bin/photo-autobackup.sh once
-  4) 폰 사진 전량 이관:  ~/bin/photo-autobackup.sh migrate      (계획 확인 후 yes)
-  5) 이후 자동 감시:     ~/bin/photo-autobackup.sh watch
+--- 이후 순서 ---
+  안 되면 먼저:      ~/bin/photo-autobackup.sh setup        (다시 실행해도 안전)
+  폰 사진 전량 이관: ~/bin/photo-autobackup.sh migrate      (계획 확인 후 yes)
+  이후 자동 감시:    ~/bin/photo-autobackup.sh watch
 NEXT

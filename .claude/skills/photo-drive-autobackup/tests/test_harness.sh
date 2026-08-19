@@ -157,6 +157,32 @@ echo "== 14. migrate 는 확인 없이 지우지 않는다 (yes 미입력 시 �
 echo "no" | "$SKILL/scripts/photo-autobackup.sh" migrate >/dev/null 2>&1
 check "거부하면 원본 그대로"        1 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
 
+echo "== 15. 경로를 잘못 잡았을 때 doctor 가 잡아낸다 =="
+mkdir -p "$SHARED/DCIM/Camera" "$HOME/empty-watch"
+echo "real-photo" > "$SHARED/DCIM/Camera/G.jpg"
+cat >> "$HOME/.config/photo-autobackup/config.env" <<CFG
+WATCH_DIRS="$HOME/empty-watch"
+CFG
+out=$("$SKILL/scripts/photo-autobackup.sh" doctor 2>&1)
+check "잘못된 경로 진단"        1 "$(echo "$out" | grep -c '경로를 잘못 잡았다')"
+check "실제 위치 알려줌"        1 "$(echo "$out" | grep -c 'DCIM/Camera')"
+check "setup 안내"              1 "$(echo "$out" | grep -c "setup' 을 실행")"
+
+echo "== 16. setup 이 사진 실제 위치를 찾아 스스로 설정한다 =="
+out=$("$SKILL/scripts/photo-autobackup.sh" setup "내 폰 사진" 2>&1)
+cfg="$HOME/.config/photo-autobackup/config.env"
+check "감시 폴더를 실제 위치로 교정" 1 "$(grep -c "^WATCH_DIRS=\"$SHARED/DCIM/Camera\"$" "$cfg")"
+check "드라이브 폴더 인자 반영"      1 "$(grep -c '^DRIVE_FOLDER="내 폰 사진"$' "$cfg")"
+check "이관 범위 자동 기록"          1 "$(grep -c "^MIGRATE_ROOTS=.*$SHARED" "$cfg")"
+check "기존 설정 백업됨"             1 "$(ls "$HOME/.config/photo-autobackup/" | grep -c 'config.env.bak')"
+check "다음 단계 안내"               1 "$(echo "$out" | grep -c '다음: photo-autobackup.sh migrate')"
+
+echo "== 17. setup 직후 실제로 동작한다 (교정된 경로로 업로드) =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "교정된 폴더에서 사진 처리됨"  0 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
+check "드라이브에 올라감"            1 "$(find "$ROOT/remote/내 폰 사진" -name 'G.jpg' 2>/dev/null | wc -l)"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

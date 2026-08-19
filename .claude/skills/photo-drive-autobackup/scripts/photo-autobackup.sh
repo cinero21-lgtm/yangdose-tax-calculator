@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.1.1"
+VERSION="1.2.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -83,6 +83,30 @@ media_scan() {
 }
 
 md5_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+# 권한 토글은 사람이 눌러야만 켜진다. 대신 어느 메뉴인지 찾아 헤매지 않도록
+# 해당 설정 화면을 폰에서 바로 띄워 준다.
+open_settings() {
+  have am || return 1
+  am start -a "$1" -d "package:com.termux" >/dev/null 2>&1
+}
+
+# 사진이 실제로 어디에 있는지 폰에서 직접 찾아낸다. DCIM/Camera 를 가정하면
+# 기기·앱마다 다른 실제 경로를 놓친다 — 이게 "안 된다"의 흔한 원인이다.
+detect_roots() {
+  local d
+  [ -d "$HOME/storage/shared" ] && printf '%s\n' "$HOME/storage/shared"
+  for d in /storage/*; do
+    case "$(basename "$d" 2>/dev/null)" in
+      emulated|self|sdcard0|container|"*") continue ;;
+    esac
+    [ -d "$d" ] && [ -r "$d" ] && printf '%s\n' "$d"
+  done
+}
+
+detect_photo_dirs() {
+  discover_all 2>/dev/null | sed 's|/[^/]*$||' | sort | uniq -c | sort -rn
+}
 
 # REQUIRE_WIFI=1인데 판정 수단이 없으면 진행을 막는다. 요금을 지키려고 켠 옵션이
 # 판정 불가라는 이유로 무력화되면 켠 의미가 없다.
@@ -438,12 +462,129 @@ cmd_restore() {
   log INFO "복구 완료 — $restored건"
 }
 
+# ------------------------------------------------------- 자동 설정 (한 방에)
+# 폰의 실제 상태를 읽어서 설정을 스스로 맞춘다. 사람이 값을 정해 넣지 않아도
+# 되도록 하는 게 목적이다 — 잘못된 경로 가정이 "안 된다"의 가장 흔한 원인이라서다.
+cmd_setup() {
+  local folder="${1:-}" roots cam dirs top
+
+  echo "=========== photo-autobackup 자동 설정 (v$VERSION) ==========="
+
+  # 1) 저장소 접근
+  if [ ! -d "$HOME/storage" ]; then
+    echo
+    echo "[1/5] 저장소 접근 권한을 요청한다. 뜨는 팝업에서 '허용'을 눌러라."
+    have termux-setup-storage && termux-setup-storage
+    sleep 3
+  else
+    echo
+    echo "[1/5] 저장소 접근: 이미 연결됨"
+  fi
+  [ -d "$HOME/storage/shared" ] || {
+    echo "  ! 아직 연결되지 않았다. 권한을 허용한 뒤 이 명령을 다시 실행해라."
+    return 1
+  }
+
+  # 2) 사진이 실제로 어디 있는지 찾는다
+  echo
+  echo "[2/5] 폰에서 사진이 있는 위치를 찾는 중..."
+  roots=$(detect_roots | tr '\n' ' ')
+  MIGRATE_ROOTS="$roots"
+  dirs=$(detect_photo_dirs)
+  if [ -z "$dirs" ]; then
+    echo "  사진을 한 장도 못 찾았다. 검사 범위: $roots"
+    echo "  갤러리에 사진이 있는데도 이렇다면 저장소 권한 문제다 — doctor --fix 를 실행해라."
+  else
+    echo "$dirs" | head -8 | awk '{c=$1; $1=""; sub(/^ /,""); printf "    %6d건  %s\n", c, $0}'
+  fi
+
+  # 카메라 폴더를 고른다: DCIM/Camera 가 있으면 그것, 없으면 사진이 제일 많은 폴더.
+  cam=$(printf '%s\n' "$dirs" | awk '{$1=""; sub(/^ /,""); print}' | grep -m1 -i '/DCIM/Camera$' || true)
+  if [ -z "$cam" ]; then
+    top=$(printf '%s\n' "$dirs" | head -n1 | awk '{$1=""; sub(/^ /,""); print}')
+    cam="${top:-$HOME/storage/dcim/Camera}"
+  fi
+  echo "  → 감시할 카메라 폴더: $cam"
+
+  # 3) 설정 파일 기록
+  echo
+  echo "[3/5] 설정 파일을 쓴다: $CONFIG_FILE"
+  [ -n "$folder" ] || folder="${DRIVE_FOLDER:-폰 사진}"
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+  cat > "$CONFIG_FILE" <<CFG
+# photo-autobackup — setup 이 폰 상태를 읽어 자동 생성했다 ($(date '+%Y-%m-%d %H:%M'))
+RCLONE_REMOTE="$RCLONE_REMOTE"
+DRIVE_FOLDER="$folder"
+WATCH_DIRS="$cam"
+MIGRATE_ROOTS="$roots"
+LAYOUT="date"
+MIGRATE_LAYOUT="mirror"
+EXTENSIONS="$EXTENSIONS"
+MIN_AGE_SECONDS=$MIN_AGE_SECONDS
+POLL_SECONDS=$POLL_SECONDS
+RETENTION_DAYS=$RETENTION_DAYS
+MAX_ATTEMPTS=$MAX_ATTEMPTS
+REQUIRE_WIFI=0
+DRY_RUN=0
+RCLONE_EXTRA_ARGS=""
+CFG
+  echo "  드라이브 폴더 : $folder"
+  echo "  감시 폴더     : $cam"
+  echo "  이관 검사 범위: $roots"
+  load_config
+
+  # 4) 고칠 수 있는 건 고친다
+  echo
+  echo "[4/5] 환경 점검 및 자동 수리"
+  cmd_doctor --fix | sed 's/^/  /'
+
+  # 5) 구글드라이브 연결 여부
+  echo
+  echo "[5/5] 구글드라이브 연결"
+  if have rclone && rclone listremotes 2>/dev/null | grep -qx "$RCLONE_REMOTE:"; then
+    if rclone_run lsd "$RCLONE_REMOTE:" >/dev/null 2>&1; then
+      echo "  연결됨 — 바로 쓸 수 있다."
+      echo
+      echo "다음: photo-autobackup.sh migrate    (폰 사진 전부 옮기고 비우기)"
+      echo "      photo-autobackup.sh watch      (앞으로 찍는 사진 자동 처리)"
+      return 0
+    fi
+    echo "  리모트는 있는데 접속이 안 된다 → rclone config reconnect $RCLONE_REMOTE:"
+    return 1
+  fi
+  cat <<GUIDE
+  아직 구글 계정이 연결되지 않았다. 이 부분만은 구글 로그인이라 사람이 해야 한다:
+
+    rclone config
+      n                 (새 리모트)
+      $RCLONE_REMOTE            (이름 — 이대로 적어라)
+      drive             (구글드라이브)
+      (client_id/secret 은 그냥 엔터)
+      3                 (scope: drive.file — 이 앱이 만든 파일만 접근)
+      (엔터)             (service account 없음)
+      n                 (고급 설정 안 함)
+      n                 (auto config — 반드시 n)
+      → 화면에 뜨는 http://127.0.0.1:53682/... 주소를 폰 브라우저에 붙여넣고 로그인
+      n                 (공유 드라이브 아님)
+      y                 (저장)
+      q                 (종료)
+
+  끝나면 다시: photo-autobackup.sh setup
+GUIDE
+  return 1
+}
+
 # ------------------------------------------------------------------------ 진단
 cmd_doctor() {
-  local ok=1 d
-  echo "photo-autobackup doctor (v$VERSION)"
+  local ok=1 d fix=0
+  [ "${1:-}" = "--fix" ] && fix=1
+  echo "photo-autobackup doctor (v$VERSION)$([ "$fix" = 1 ] && echo ' --fix (고칠 수 있는 건 자동으로 고친다)')"
   echo "설정 파일: $CONFIG_FILE $([ -f "$CONFIG_FILE" ] && echo '(있음)' || echo '(없음 — 기본값 사용)')"
 
+  if ! have rclone && [ "$fix" = 1 ] && have pkg; then
+    echo "  [고침] rclone 설치 중..."; pkg install -y rclone >/dev/null 2>&1
+  fi
   if have rclone; then echo "  [OK] rclone 설치됨: $(rclone version | head -n1)"
   else echo "  [실패] rclone 없음 — pkg install rclone"; ok=0; fi
 
@@ -458,16 +599,30 @@ cmd_doctor() {
     echo "  [실패] rclone 리모트 '$RCLONE_REMOTE' 없음 — references/android-setup.md 참고"; ok=0
   fi
 
+  if [ ! -d "$HOME/storage" ] && [ "$fix" = 1 ] && have termux-setup-storage; then
+    echo "  [고침] 저장소 접근 설정 — 뜨는 팝업에서 '허용'을 눌러라"
+    termux-setup-storage; sleep 3
+  fi
+
+  local perm_bad=0
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     d=$(resolve_dir "$d")
     if [ -d "$d" ]; then
       if [ -w "$d" ]; then echo "  [OK] 감시 폴더 쓰기 가능: $d"
-      else echo "  [실패] 쓰기 권한 없음(삭제 불가): $d — 앱 정보에서 '모든 파일 접근 허용'"; ok=0; fi
+      else echo "  [실패] 쓰기 권한 없음(삭제 불가): $d"; ok=0; perm_bad=1; fi
     else
       echo "  [실패] 폴더 없음: $d — termux-setup-storage 실행했는지 확인"; ok=0
     fi
   done < <(printf '%s\n' $WATCH_DIRS)
+
+  if [ "$perm_bad" = 1 ]; then
+    if [ "$fix" = 1 ] && open_settings android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION; then
+      echo "         → 폰에 설정 화면을 띄웠다. '모든 파일 관리 허용'을 켜고 돌아와서 다시 실행해라."
+    else
+      echo "         → 설정 > 앱 > Termux > 권한 > 파일 및 미디어 > '모든 파일 관리 허용'"
+    fi
+  fi
 
   for d in $MIGRATE_ROOTS; do
     d=$(resolve_dir "$d")
@@ -475,12 +630,34 @@ cmd_doctor() {
   done
 
   [ -w "$TRASH_DIR" ] && echo "  [OK] 휴지통 쓰기 가능: $TRASH_DIR" || { echo "  [실패] 휴지통 접근 불가: $TRASH_DIR"; ok=0; }
+  if [ "$fix" = 1 ] && have pkg; then
+    have termux-media-scan || { echo "  [고침] termux-api 설치 중..."; pkg install -y termux-api >/dev/null 2>&1; }
+    have inotifywait     || { echo "  [고침] inotify-tools 설치 중..."; pkg install -y inotify-tools >/dev/null 2>&1; }
+  fi
   have termux-media-scan && echo "  [OK] termux-api 있음 (갤러리 색인 갱신 가능)" || echo "  [참고] termux-api 없음 — 지운 사진 썸네일이 갤러리에 남을 수 있다 (pkg install termux-api)"
   have inotifywait && echo "  [OK] inotify-tools 있음 (촬영 즉시 반응)" || echo "  [참고] inotify-tools 없음 — ${POLL_SECONDS}초 주기 폴링으로 동작 (pkg install inotify-tools)"
+
+  # 설정된 감시 폴더에 사진이 하나도 없고 다른 곳에 잔뜩 있으면, 경로를 잘못 잡은 것이다.
+  local watch_n found_n
+  watch_n=$(collect_candidates 2>/dev/null | wc -l | tr -d ' ')
+  found_n=$(discover_all 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$watch_n" = "0" ] && [ "${found_n:-0}" -gt 0 ]; then
+    echo "  [실패] 감시 폴더에는 사진이 0건인데 폰에는 ${found_n}건이 있다 — 경로를 잘못 잡았다"
+    echo "         실제 사진 위치:"
+    detect_photo_dirs | head -5 | awk '{c=$1; $1=""; sub(/^ /,""); printf "           %6d건  %s\n", c, $0}'
+    echo "         → 'photo-autobackup.sh setup' 을 실행하면 자동으로 다시 잡는다"
+    ok=0
+  fi
   [ "$REQUIRE_WIFI" = "1" ] && { have termux-wifi-connectioninfo && echo "  [OK] Wi-Fi 전용 모드 판정 가능" || { echo "  [실패] REQUIRE_WIFI=1인데 termux-api가 없어 업로드가 계속 보류된다"; ok=0; }; }
 
   echo
-  [ "$ok" = "1" ] && echo "결과: 바로 쓸 수 있다." || echo "결과: 위 [실패] 항목을 먼저 해결해야 한다."
+  if [ "$ok" = "1" ]; then
+    echo "결과: 바로 쓸 수 있다."
+  elif [ "$fix" = 1 ]; then
+    echo "결과: 자동으로 고칠 수 있는 건 고쳤다. 위 [실패]가 남았으면 안내대로 하고 다시 실행해라."
+  else
+    echo "결과: 위 [실패] 항목을 해결해야 한다. 'doctor --fix' 를 쓰면 고칠 수 있는 건 알아서 고친다."
+  fi
   return $((1 - ok))
 }
 
@@ -505,12 +682,14 @@ usage() {
   cat <<'USAGE'
 사용법: photo-autobackup.sh <명령>
 
+  setup [폴더이름] 폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다.
+                   처음 쓸 때와 "안 될 때" 제일 먼저 실행할 명령.
   migrate [--yes]  폰에 있는 사진을 전부 드라이브로 옮기고 폰에서 치운다(1회성).
                    계획을 먼저 보여주고 yes 를 받아야 진행한다. --yes 면 바로 진행.
   verify-empty     폰에 사진이 남아 있는지, 어디에 남았는지 확인한다
   once             감시 폴더를 한 번 훑어서 업로드+검증+휴지통 이동
   watch            계속 감시 (Termux:Boot에서 자동 실행되는 모드)
-  doctor           설치/권한/접속 상태 진단
+  doctor [--fix]   설치/권한/접속 상태 진단. --fix 면 고칠 수 있는 건 자동으로 고친다
   status           감시 대기·폰 전체 사진 수·휴지통·누적 현황
   restore <패턴>   휴지통에서 원래 자리로 되돌린다 (all이면 전부)
   purge            보관 기간 지난 휴지통 파일 완전 삭제
@@ -523,11 +702,12 @@ USAGE
 main() {
   load_config
   case "${1:-}" in
+    setup)          shift; cmd_setup "${1:-}" ;;
     migrate)        shift; cmd_migrate "$@" ;;
     verify-empty)   cmd_verify_empty ;;
     once)           cmd_once ;;
     watch)          cmd_watch ;;
-    doctor)         cmd_doctor ;;
+    doctor)         shift; cmd_doctor "${1:-}" ;;
     status)         cmd_status ;;
     restore)        shift; cmd_restore "${1:-}" ;;
     purge)          cmd_purge ;;
