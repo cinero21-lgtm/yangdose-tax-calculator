@@ -1,0 +1,98 @@
+# 증상별 해결
+
+먼저 `photo-autobackup.sh doctor`와 로그(`~/.local/share/photo-autobackup/autobackup.log`)
+부터 확인해라. 대부분 여기에 원인이 그대로 찍혀 있다.
+
+## 업로드는 되는데 폰에서 안 지워진다
+
+로그에 `휴지통 이동 실패(저장소 권한 확인 필요)`.
+
+안드로이드 11+ 스코프드 스토리지 때문이다. 설정 → 앱 → Termux → 권한 → 파일 및 미디어
+→ '모든 파일 관리 허용'을 켜라. 켠 뒤 `doctor`의 "감시 폴더 쓰기 가능"이 [OK]로 바뀌면 된다.
+
+## 갤러리에 사진이 아직 보인다 (열면 없다고 뜬다)
+
+MediaStore 색인이 안 지워진 것이다. `termux-api` 패키지와 Termux:API **앱**이 둘 다
+있어야 `termux-media-scan`이 동작한다. 앱은 F-Droid에서, 패키지는 `pkg install termux-api`.
+
+임시로는 갤러리 앱 캐시를 지우거나 재부팅해도 사라진다.
+
+## 화면 끄면 멈춘다
+
+1. 배터리 최적화에서 Termux 제외 (android-setup.md 3번)
+2. `watch`는 자동으로 `termux-wake-lock`을 잡지만, Termux 알림에 'wake lock held'가
+   떠 있는지 확인해라. 안 떠 있으면 `pkg install termux-api` 후 다시 띄워라.
+3. 그래도 불안하면 `watch` 대신 크론으로 주기 실행하는 쪽이 견고하다:
+   ```sh
+   pkg install -y cronie termux-services
+   sv-enable crond
+   crontab -e     # 15분마다:  */15 * * * * $HOME/bin/photo-autobackup.sh once
+   ```
+
+## 재부팅하면 자동으로 안 뜬다
+
+Termux:Boot 앱은 설치만으로는 등록되지 않는다. **한 번 열어야** 부팅 수신이 활성화된다.
+그리고 `~/.termux/boot/photo-autobackup.sh`에 실행 권한이 있어야 한다(`chmod +x`).
+
+## `Failed to get md5` / 해시가 비어서 삭제가 보류된다
+
+- 구글드라이브는 자기가 변환한 문서(구글 문서/시트)에는 MD5를 안 준다. 사진은 정상적으로
+  준다. 사진에서 이게 나면 업로드가 실제로 안 끝난 것이다.
+- 토큰 만료: `rclone config reconnect gdrive:`
+- 이 상황에서 원본이 안 지워지는 건 **의도된 동작**이다. 검증 못 한 파일은 남긴다.
+
+## 같은 사진이 드라이브에 두 번 올라간다
+
+파일 이름이 같고 내용이 다르면 뒤 파일에 해시 앞 8자리를 붙여 따로 올린다
+(`IMG_0001-3f2a9c11.jpg`). 여러 앱이 같은 이름을 쓰는 경우다. 내용까지 같으면
+업로드를 건너뛰고 휴지통으로만 보내므로 중복이 생기지 않는다.
+
+## 데이터 요금이 걱정된다
+
+`config.env`에 대역폭 제한을 걸거나, Wi-Fi일 때만 돌게 한다.
+
+```sh
+RCLONE_EXTRA_ARGS="--bwlimit 1M --transfers 2"
+```
+
+Wi-Fi 전용으로 하려면 `watch` 대신 `once`를 쓰고, 크론 항목 앞에 조건을 붙인다:
+
+```sh
+*/15 * * * * [ "$(getprop wifi.interface >/dev/null; dumpsys wifi 2>/dev/null | grep -c 'Wi-Fi is enabled')" = 1 ] && $HOME/bin/photo-autobackup.sh once
+```
+
+(기기마다 판정 방법이 다르니, 간단하게는 `termux-wifi-connectioninfo` 출력에
+`supplicant_state: COMPLETED`가 있는지 보는 쪽이 안정적이다.)
+
+## 실수로 지운 걸 되돌리고 싶다
+
+```sh
+photo-autobackup.sh status                  # 휴지통에 몇 건 있는지
+photo-autobackup.sh restore IMG_0042        # 이름 일부로 지정
+photo-autobackup.sh restore all             # 전부 되돌리기
+```
+
+보관 기간(기본 30일)이 지나 `purge`된 것은 폰에서 복구할 수 없다. 다만 **드라이브에는
+남아 있으므로** 거기서 내려받으면 된다 — 애초에 그게 이 자동화의 목적이다.
+`manifest.tsv`에 드라이브 경로가 적혀 있다.
+
+## 특정 파일만 계속 실패한다
+
+5회 실패하면 재시도를 멈춘다(모바일 데이터 낭비 방지). 로그에서 원인을 찾아 고친 뒤:
+
+```sh
+photo-autobackup.sh reset-failures
+```
+
+파일 자체가 깨진 경우(0바이트, 촬영 중 앱 강제종료)는 지우고 넘어가는 게 맞다.
+
+## 처음부터 다시 하고 싶다
+
+```sh
+pkill -f photo-autobackup            # 감시 중지
+photo-autobackup.sh restore all      # 휴지통 되돌리기 (원하면)
+rm -rf ~/.local/share/photo-autobackup ~/.config/photo-autobackup
+rm -f ~/bin/photo-autobackup.sh ~/.termux/boot/photo-autobackup.sh
+```
+
+드라이브에 올라간 파일은 그대로 남는다.

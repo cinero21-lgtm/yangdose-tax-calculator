@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# photo-autobackup 로직 검증용 하네스 (rclone/termux 없이 동작)
+set -uo pipefail
+SKILL="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT=$(mktemp -d)
+export HOME="$ROOT/home"
+mkdir -p "$HOME/storage/dcim/Camera" "$ROOT/bin" "$ROOT/remote"
+
+# ---- rclone 스텁: $ROOT/remote 를 구글드라이브라고 친다
+cat > "$ROOT/bin/rclone" <<'RC'
+#!/usr/bin/env bash
+REMOTE_ROOT="$RCLONE_FAKE_ROOT"
+cmd="$1"; shift
+strip() { printf '%s' "${1#gdrive:}"; }
+case "$cmd" in
+  version) echo "rclone v1.0-fake" ;;
+  listremotes) echo "gdrive:" ;;
+  lsd) exit 0 ;;
+  hashsum)
+    shift # MD5
+    p="$REMOTE_ROOT/$(strip "$1")"
+    [ -f "$p" ] || exit 1
+    echo "$(md5sum "$p" | cut -d' ' -f1)  $(basename "$p")"
+    ;;
+  copyto)
+    [ "${RCLONE_FAKE_FAIL:-0}" = "1" ] && exit 1
+    dst="$REMOTE_ROOT/$(strip "$2")"
+    mkdir -p "$(dirname "$dst")"
+    cp "$1" "$dst"
+    [ "${RCLONE_FAKE_CORRUPT:-0}" = "1" ] && printf 'x' >> "$dst"
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+RC
+chmod +x "$ROOT/bin/rclone"
+export PATH="$ROOT/bin:$PATH"
+export RCLONE_FAKE_ROOT="$ROOT/remote"
+
+mkdir -p "$HOME/.config/photo-autobackup"
+cat > "$HOME/.config/photo-autobackup/config.env" <<CFG
+RCLONE_REMOTE="gdrive"
+DRIVE_FOLDER="PhoneCamera"
+WATCH_DIRS="$HOME/storage/dcim/Camera"
+MIN_AGE_SECONDS=0
+RETENTION_DAYS=30
+CFG
+export PHOTO_AUTOBACKUP_CONFIG="$HOME/.config/photo-autobackup/config.env"
+
+CAM="$HOME/storage/dcim/Camera"
+TRASH="$HOME/.local/share/photo-autobackup/trash"
+pass=0; fail=0
+check() { if [ "$2" = "$3" ]; then echo "  PASS $1"; pass=$((pass+1)); else echo "  FAIL $1 (기대=$2 실제=$3)"; fail=$((fail+1)); fi; }
+
+echo "== 1. 정상 경로: 업로드 → 검증 → 휴지통 =="
+echo "photo-data-1" > "$CAM/IMG_0001.jpg"
+"$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "원본이 카메라 폴더에서 사라짐" 0 "$(ls "$CAM" | wc -l)"
+check "휴지통에 1건"                  1 "$(find "$TRASH" -name '*IMG_0001.jpg' | wc -l)"
+check "드라이브에 업로드됨"            1 "$(find "$ROOT/remote" -name 'IMG_0001.jpg' | wc -l)"
+check "날짜 폴더 구조"                 1 "$(find "$ROOT/remote/PhoneCamera/$(date +%Y)/$(date +%Y-%m)" -name 'IMG_0001.jpg' 2>/dev/null | wc -l)"
+check "manifest 기록됨"                1 "$(grep -c 'IMG_0001.jpg' "$TRASH/manifest.tsv")"
+
+echo "== 2. 업로드 실패 시 원본 보존 =="
+echo "photo-data-2" > "$CAM/IMG_0002.jpg"
+RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "원본 그대로 남음"               1 "$(ls "$CAM" | wc -l)"
+check "휴지통에 안 들어감"             0 "$(find "$TRASH" -name '*IMG_0002.jpg' | wc -l)"
+
+echo "== 3. 전송 중 손상(해시 불일치) 시 삭제 보류 =="
+rm -f "$CAM/IMG_0002.jpg"; "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "photo-data-3" > "$CAM/IMG_0003.jpg"
+RCLONE_FAKE_CORRUPT=1 "$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "원본 보존됨"                    1 "$(ls "$CAM" | wc -l)"
+
+echo "== 4. 동명이인 파일은 이름을 바꿔 올린다 =="
+rm -f "$CAM/IMG_0003.jpg"
+echo "완전히-다른-내용" > "$CAM/IMG_0001.jpg"
+"$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "원격 IMG_0001* 2개"             2 "$(find "$ROOT/remote" -name 'IMG_0001*' | wc -l)"
+check "기존 원격 파일 안 덮어씀"        "photo-data-1" "$(cat "$ROOT/remote/PhoneCamera/$(date +%Y)/$(date +%Y-%m)/IMG_0001.jpg")"
+
+echo "== 5. DRY_RUN 은 아무것도 지우지 않는다 =="
+echo "photo-data-5" > "$CAM/IMG_0005.jpg"
+DRY_RUN=1 sh -c "echo 'DRY_RUN=1' >> \"$HOME/.config/photo-autobackup/config.env\""
+"$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "DRY_RUN에서 원본 유지"          1 "$(ls "$CAM" | wc -l)"
+sed -i '/^DRY_RUN=1$/d' "$HOME/.config/photo-autobackup/config.env"
+rm -f "$CAM/IMG_0005.jpg"
+
+echo "== 6. 이미 올라간 파일 재검증(중복 업로드 없이 정리) =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "photo-data-1" > "$CAM/IMG_0001.jpg"   # 원격과 동일 내용
+"$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "중복 없이 휴지통 이동"           0 "$(ls "$CAM" | wc -l)"
+
+echo "== 7. 복구 =="
+"$SKILL/scripts/photo-autobackup.sh" restore IMG_0001.jpg >/dev/null 2>&1
+check "카메라 폴더로 되돌아옴"          1 "$(ls "$CAM" | grep -c IMG_0001.jpg)"
+
+echo "== 8. 실패 5회 후 재시도 중단 =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CAM"/*; echo "bad" > "$CAM/IMG_0009.jpg"
+for i in 1 2 3 4 5; do RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1; done
+check "실패 카운터 5 도달"              "IMG_0009.jpg	5" "$(sed "s|$CAM/||" "$HOME/.local/share/photo-autobackup/failures.tsv" | head -n1)"
+out=$("$SKILL/scripts/photo-autobackup.sh" once 2>&1)
+check "6회차에는 보류로 건너뜀"         1 "$(echo "$out" | grep -c '보류 1건')"
+
+echo "== 9. doctor / status 실행 가능 =="
+"$SKILL/scripts/photo-autobackup.sh" doctor >/dev/null 2>&1; check "doctor 종료코드 0" 0 "$?"
+"$SKILL/scripts/photo-autobackup.sh" status >/dev/null 2>&1; check "status 종료코드 0" 0 "$?"
+
+echo
+echo "합계: PASS=$pass FAIL=$fail"
+rm -rf "$ROOT"
+[ "$fail" = "0" ]

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Termux에 photo-autobackup을 설치한다. 여러 번 실행해도 안전하다(멱등).
+set -uo pipefail
+
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$HOME/bin"
+CONFIG_DIR="$HOME/.config/photo-autobackup"
+BOOT_DIR="$HOME/.termux/boot"
+
+say() { printf '\n=== %s\n' "$*"; }
+
+say "1/5 필요한 패키지 설치"
+if command -v pkg >/dev/null 2>&1; then
+  pkg install -y rclone termux-api inotify-tools coreutils findutils || \
+    echo "  ! 일부 패키지 설치에 실패했다. 'pkg update' 후 다시 실행해 볼 것."
+else
+  echo "  ! Termux가 아닌 환경이다. rclone, inotify-tools를 직접 설치해야 한다."
+fi
+
+say "2/5 공유 저장소 접근 권한"
+if [ -d "$HOME/storage/dcim" ]; then
+  echo "  이미 연결되어 있다: $HOME/storage/dcim"
+else
+  echo "  termux-setup-storage 를 실행한다. 뜨는 팝업에서 '허용'을 눌러라."
+  command -v termux-setup-storage >/dev/null 2>&1 && termux-setup-storage
+  sleep 2
+  [ -d "$HOME/storage/dcim" ] || echo "  ! 아직 연결되지 않았다. 권한을 허용한 뒤 이 스크립트를 다시 실행해라."
+fi
+
+say "3/5 스크립트 배치"
+mkdir -p "$BIN_DIR"
+install -m 755 "$SRC_DIR/photo-autobackup.sh" "$BIN_DIR/photo-autobackup.sh"
+echo "  설치됨: $BIN_DIR/photo-autobackup.sh"
+
+say "4/5 설정 파일"
+mkdir -p "$CONFIG_DIR"
+if [ -f "$CONFIG_DIR/config.env" ]; then
+  echo "  이미 있어서 건드리지 않았다: $CONFIG_DIR/config.env"
+else
+  cp "$SRC_DIR/config.example.env" "$CONFIG_DIR/config.env"
+  echo "  생성됨: $CONFIG_DIR/config.env  (RCLONE_REMOTE / DRIVE_FOLDER 를 확인해라)"
+fi
+
+say "5/5 부팅 시 자동 실행"
+mkdir -p "$BOOT_DIR"
+cat > "$BOOT_DIR/photo-autobackup.sh" <<'BOOT'
+#!/data/data/com.termux/files/usr/bin/sh
+termux-wake-lock
+exec "$HOME/bin/photo-autobackup.sh" watch
+BOOT
+chmod +x "$BOOT_DIR/photo-autobackup.sh"
+echo "  등록됨: $BOOT_DIR/photo-autobackup.sh"
+echo "  (Play스토어/F-Droid에서 'Termux:Boot' 앱을 설치하고 한 번 실행해야 부팅 시 동작한다)"
+
+cat <<'NEXT'
+
+--- 다음 순서 ---
+  1) 구글드라이브 연결:  rclone config     (references/android-setup.md 4단계 참고)
+  2) 상태 점검:          ~/bin/photo-autobackup.sh doctor
+  3) 안전 예행연습:      config.env 에 DRY_RUN=1 넣고  ~/bin/photo-autobackup.sh once
+  4) 실제 가동:          DRY_RUN=0 으로 되돌리고  ~/bin/photo-autobackup.sh watch
+NEXT
