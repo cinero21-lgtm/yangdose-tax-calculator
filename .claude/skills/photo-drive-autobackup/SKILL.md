@@ -64,6 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculat
 
 사용자에게 물어봐야 할 것부터 확인해라. 답이 없으면 괄호 안 기본값으로 간다.
 
+- 동영상도 옮길까 (예 — 사진과 **다른 폴더**로 분리해서 올린다)
 - 어느 폴더를 비울까 (`DCIM/Camera`만) — 스크린샷까지 원하는지 꼭 확인해라
 - 드라이브 어디에 쌓을까 (`PhoneCamera/연/연-월/`)
 - 동영상도 올릴까 (아니오 — 데이터 요금이 커진다)
@@ -90,7 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculat
 | 명령 | 하는 일 |
 |---|---|
 | `perm` | 권한만 짧게 점검하고 필요한 설정 화면을 폰에 띄운다 |
-| `setup [폴더이름]` | 폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다 |
+| `setup [사진폴더] [동영상폴더]` | 폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다 |
 | `migrate [--yes]` | 폰에 있는 사진을 **전부** 옮기고 폰을 비운다(1회성). 계획을 먼저 보여주고 `yes`를 받아야 진행 |
 | `verify-empty` | 폰에 사진이 남았는지, 어디에 몇 건인지 확인 |
 | `once` | 한 번 훑어서 업로드+검증+휴지통 이동. cron/Tasker에서 부르기 좋다 |
@@ -100,6 +101,27 @@ curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculat
 | `restore <패턴>` | 휴지통에서 원래 자리로 되돌린다. `all`이면 전부 |
 | `purge` | 보관 기간 지난 것 완전 삭제 (`once`가 끝날 때도 자동 실행) |
 | `reset-failures` | 실패 카운터 초기화. 원인을 고친 뒤에 쓴다 |
+
+## 사진과 동영상은 따로 간다
+
+`VIDEO_EXTENSIONS`에 걸리는 파일은 `VIDEO_DRIVE_FOLDER`로 들어간다. 섞으면 드라이브가
+뒤죽박죽이 되고, 동영상은 사진보다 수십 배 커서 진행 상황을 가늠하기도 어렵다.
+
+```
+Z폴드 8 사진/DCIM/Camera/IMG_0001.jpg
+Z폴드 8 동영상/DCIM/Camera/VID_0001.mp4
+```
+
+`setup`에 폴더 이름을 하나만 주면 동영상 폴더 이름을 알아서 짝지어 만든다
+(`Z폴드 8 사진` → `Z폴드 8 동영상`). 직접 지정하려면 두 번째 인자로 준다:
+
+```sh
+photo-autobackup.sh setup "Z폴드 8 사진" "Z폴드 8 동영상"
+```
+
+동영상은 그냥 폰에 두고 싶다면 `VIDEO_EXTENSIONS=""` 로 비운다. 그러면 훑지도, 올리지도,
+지우지도 않는다. 사용자가 "사진만"이라고 했는데 동영상까지 사라지면 사고이므로,
+동영상을 다룰지 먼저 확인해라.
 
 ## 전량 이관에서 특히 주의할 것
 

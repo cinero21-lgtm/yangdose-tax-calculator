@@ -200,6 +200,42 @@ check "삼성 메뉴 경로 안내"  1 "$(echo "$out" | grep -c '특별한 접�
 "$SKILL/scripts/photo-autobackup.sh" perm >/dev/null 2>&1; check "perm 종료코드 1" 1 "$?"
 rm -f "$SHARED/DCIM"; mv "$SHARED/DCIM.bak" "$SHARED/DCIM"
 
+echo "== 20. 동영상은 별도 폴더로 간다 =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+# 앞선 setup 테스트가 config 를 새로 쓰므로 여기서 쓸 폴더명을 다시 고정한다.
+cat >> "$HOME/.config/photo-autobackup/config.env" <<CFG
+DRIVE_FOLDER="Z폴드 8 사진"
+VIDEO_DRIVE_FOLDER="Z폴드 8 동영상"
+CFG
+mkdir -p "$SHARED/DCIM/Camera"
+echo "photo-x" > "$SHARED/DCIM/Camera/P1.jpg"
+echo "video-y" > "$SHARED/DCIM/Camera/V1.mp4"
+echo "video-z" > "$SHARED/DCIM/Camera/V2.MOV"     # 대문자 확장자도 동영상이다
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "사진은 사진 폴더로"        1 "$(ls "$ROOT/remote/Z폴드 8 사진/DCIM/Camera/P1.jpg" 2>/dev/null | wc -l)"
+check "동영상은 동영상 폴더로"    1 "$(ls "$ROOT/remote/Z폴드 8 동영상/DCIM/Camera/V1.mp4" 2>/dev/null | wc -l)"
+check "대문자 .MOV 도 동영상"     1 "$(ls "$ROOT/remote/Z폴드 8 동영상/DCIM/Camera/V2.MOV" 2>/dev/null | wc -l)"
+check "동영상이 사진 폴더에 없음" 0 "$(find "$ROOT/remote/Z폴드 8 사진" -iname '*.mp4' -o -iname '*.mov' 2>/dev/null | wc -l)"
+check "폰에서 셋 다 사라짐"       0 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
+
+echo "== 21. 계획 화면이 사진/동영상을 나눠 보여준다 =="
+echo "photo-a" > "$SHARED/DCIM/Camera/P9.jpg"
+echo "video-b" > "$SHARED/DCIM/Camera/V9.mp4"
+out=$(echo "no" | "$SKILL/scripts/photo-autobackup.sh" migrate 2>&1)
+check "사진/동영상 건수 표시"     1 "$(echo "$out" | grep -c '사진 1 / 동영상 1')"
+check "동영상 목적지 표시"        1 "$(echo "$out" | grep -c '동영상 →.*Z폴드 8 동영상')"
+rm -f "$SHARED/DCIM/Camera"/*
+
+echo "== 22. VIDEO_EXTENSIONS 를 비우면 동영상을 아예 건드리지 않는다 =="
+sed -i 's|^VIDEO_EXTENSIONS=.*|VIDEO_EXTENSIONS=""|' "$HOME/.config/photo-autobackup/config.env" 2>/dev/null
+echo 'VIDEO_EXTENSIONS=""' >> "$HOME/.config/photo-autobackup/config.env"
+echo "vid" > "$SHARED/DCIM/Camera/V3.mp4"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "동영상 폰에 그대로"        1 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
+sed -i '/^VIDEO_EXTENSIONS=""$/d' "$HOME/.config/photo-autobackup/config.env"
+rm -f "$SHARED/DCIM/Camera"/*
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

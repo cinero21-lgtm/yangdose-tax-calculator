@@ -21,6 +21,10 @@ RCLONE_REMOTE="gdrive"
 DRIVE_FOLDER="PhoneCamera"
 WATCH_DIRS="$HOME/storage/dcim/Camera"
 EXTENSIONS="jpg jpeg png heic heif dng webp"
+# 동영상은 따로 다룬다. 사진과 섞이면 드라이브 폴더가 뒤죽박죽이 되고, 크기가 훨씬
+# 커서 진행 상황을 가늠하기도 어렵다.
+VIDEO_EXTENSIONS="mp4 mov m4v 3gp mkv avi webm"
+VIDEO_DRIVE_FOLDER="동영상"
 STATE_DIR="$HOME/.local/share/photo-autobackup"
 MIN_AGE_SECONDS=20
 POLL_SECONDS=60
@@ -66,6 +70,27 @@ die() { log ERROR "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 resolve_dir() { readlink -f "$1" 2>/dev/null || printf '%s' "$1"; }
+
+all_extensions() { printf '%s %s' "$EXTENSIONS" "$VIDEO_EXTENSIONS"; }
+
+# 확장자로 동영상인지 본다. 대소문자를 가리지 않는다(.MP4 도 동영상이다).
+is_video() {
+  local ext lower
+  lower=$(printf '%s' "${1##*.}" | tr 'A-Z' 'a-z')
+  for ext in $VIDEO_EXTENSIONS; do
+    [ "$lower" = "$ext" ] && return 0
+  done
+  return 1
+}
+
+# 이 파일이 들어갈 드라이브 최상위 폴더 — 사진과 동영상을 갈라 준다.
+base_folder_for() {
+  if is_video "$1" && [ -n "$VIDEO_DRIVE_FOLDER" ]; then
+    printf '%s' "$VIDEO_DRIVE_FOLDER"
+  else
+    printf '%s' "$DRIVE_FOLDER"
+  fi
+}
 
 human() {
   local b="${1:-0}"
@@ -157,21 +182,22 @@ clear_failure() {
 #   date   : PhoneCamera/2026/2026-08
 #   mirror : Z폴드 8 사진/DCIM/Camera    (폰의 폴더 구조를 그대로 재현)
 remote_dir_for() {
-  local f="$1" mode="${2:-$LAYOUT}" ymd root real rel
+  local f="$1" mode="${2:-$LAYOUT}" ymd root real rel base
+  base=$(base_folder_for "$f")
   if [ "$mode" = "mirror" ]; then
     for root in $MIGRATE_ROOTS; do
       real=$(resolve_dir "$root")
       case "$f" in
         "$real"/*)
           rel=$(dirname "${f#"$real"/}")
-          if [ "$rel" = "." ]; then printf '%s' "$DRIVE_FOLDER"
-          else printf '%s/%s' "$DRIVE_FOLDER" "$rel"; fi
+          if [ "$rel" = "." ]; then printf '%s' "$base"
+          else printf '%s/%s' "$base" "$rel"; fi
           return ;;
       esac
     done
   fi
   ymd=$(date -d "@$(stat -c %Y "$f")" '+%Y/%Y-%m' 2>/dev/null) || ymd=$(date '+%Y/%Y-%m')
-  printf '%s/%s' "$DRIVE_FOLDER" "$ymd"
+  printf '%s/%s' "$base" "$ymd"
 }
 
 rclone_run() {
@@ -249,20 +275,9 @@ process_file() {
 }
 
 # ------------------------------------------------------------------ 대상 수집
-ext_find_args() {
-  local ext first=1
-  printf '('
-  for ext in $EXTENSIONS; do
-    [ "$first" = 1 ] || printf ' -o'
-    printf ' -iname *.%s' "$ext"
-    first=0
-  done
-  printf ' )'
-}
-
 collect_candidates() {
   local d ext args=()
-  for ext in $EXTENSIONS; do args+=(-iname "*.${ext}" -o); done
+  for ext in $(all_extensions); do args+=(-iname "*.${ext}" -o); done
   unset 'args[${#args[@]}-1]'
   while IFS= read -r d; do
     [ -n "$d" ] || continue
@@ -275,7 +290,7 @@ collect_candidates() {
 # 이런 것까지 올리면 드라이브가 쓰레기로 차고, 지우면 앱이 깨진다.
 discover_all() {
   local root real args=() ext
-  for ext in $EXTENSIONS; do args+=(-iname "*.${ext}" -o); done
+  for ext in $(all_extensions); do args+=(-iname "*.${ext}" -o); done
   unset 'args[${#args[@]}-1]'
   for root in $MIGRATE_ROOTS; do
     real=$(resolve_dir "$root"); [ -d "$real" ] || continue
@@ -331,16 +346,23 @@ cmd_migrate() {
     return 0
   fi
 
+  local p_n=0 p_b=0 v_n=0 v_b=0
   while IFS= read -r f; do
     sz=$(stat -c %s "$f" 2>/dev/null) || sz=0
     bytes=$((bytes + sz))
+    if is_video "$f"; then v_n=$((v_n + 1)); v_b=$((v_b + sz))
+    else                   p_n=$((p_n + 1)); p_b=$((p_b + sz)); fi
   done < "$list"
 
   echo
   echo "======================= 이관 계획 ======================="
-  echo "대상 파일 : ${count}건"
-  echo "총 용량   : $(human "$bytes")"
-  echo "올릴 곳   : $RCLONE_REMOTE:$DRIVE_FOLDER/  (폰 폴더 구조 그대로)"
+  echo "대상 파일 : ${count}건  (사진 ${p_n} / 동영상 ${v_n})"
+  echo "총 용량   : $(human "$bytes")  (사진 $(human "$p_b") / 동영상 $(human "$v_b"))"
+  echo "사진 →    : $RCLONE_REMOTE:$DRIVE_FOLDER/"
+  if [ "$v_n" -gt 0 ]; then
+    echo "동영상 →  : $RCLONE_REMOTE:$VIDEO_DRIVE_FOLDER/"
+  fi
+  echo "정리 방식 : 폰 폴더 구조 그대로"
   echo "삭제 방식 : 검증 성공한 것만 휴지통으로 이동 (${RETENTION_DAYS}일 보관 후 완전 삭제)"
   echo
   echo "폴더별 내역 (상위 20개):"
@@ -530,7 +552,7 @@ cmd_perm() {
 # 폰의 실제 상태를 읽어서 설정을 스스로 맞춘다. 사람이 값을 정해 넣지 않아도
 # 되도록 하는 게 목적이다 — 잘못된 경로 가정이 "안 된다"의 가장 흔한 원인이라서다.
 cmd_setup() {
-  local folder="${1:-}" roots cam dirs top
+  local folder="${1:-}" vfolder="${2:-}" roots cam dirs top
 
   echo "=========== photo-autobackup 자동 설정 (v$VERSION) ==========="
 
@@ -574,6 +596,14 @@ cmd_setup() {
   echo
   echo "[3/5] 설정 파일을 쓴다: $CONFIG_FILE"
   [ -n "$folder" ] || folder="${DRIVE_FOLDER:-폰 사진}"
+  # 동영상 폴더를 안 주면 사진 폴더 이름에서 '사진'을 '동영상'으로 바꿔 짝을 맞춘다.
+  # 그래도 안 되면 그냥 '동영상'.
+  if [ -z "$vfolder" ]; then
+    case "$folder" in
+      *사진*) vfolder="${folder%사진*}동영상${folder#*사진}" ;;
+      *) vfolder="${VIDEO_DRIVE_FOLDER:-동영상}" ;;
+    esac
+  fi
   mkdir -p "$(dirname "$CONFIG_FILE")"
   [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%Y%m%d-%H%M%S)"
   cat > "$CONFIG_FILE" <<CFG
@@ -585,6 +615,8 @@ MIGRATE_ROOTS="$roots"
 LAYOUT="date"
 MIGRATE_LAYOUT="mirror"
 EXTENSIONS="$EXTENSIONS"
+VIDEO_EXTENSIONS="$VIDEO_EXTENSIONS"
+VIDEO_DRIVE_FOLDER="$vfolder"
 MIN_AGE_SECONDS=$MIN_AGE_SECONDS
 POLL_SECONDS=$POLL_SECONDS
 RETENTION_DAYS=$RETENTION_DAYS
@@ -750,7 +782,8 @@ usage() {
 사용법: photo-autobackup.sh <명령>
 
   perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
-  setup [폴더이름] 폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다.
+  setup [사진폴더] [동영상폴더]
+                   폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다.
                    처음 쓸 때와 "안 될 때" 제일 먼저 실행할 명령.
   migrate [--yes]  폰에 있는 사진을 전부 드라이브로 옮기고 폰에서 치운다(1회성).
                    계획을 먼저 보여주고 yes 를 받아야 진행한다. --yes 면 바로 진행.
@@ -771,7 +804,7 @@ main() {
   load_config
   case "${1:-}" in
     perm)           cmd_perm ;;
-    setup)          shift; cmd_setup "${1:-}" ;;
+    setup)          shift; cmd_setup "${1:-}" "${2:-}" ;;
     migrate)        shift; cmd_migrate "$@" ;;
     verify-empty)   cmd_verify_empty ;;
     once)           cmd_once ;;
