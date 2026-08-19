@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -110,6 +110,21 @@ die() { log ERROR "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 resolve_dir() { readlink -f "$1" 2>/dev/null || printf '%s' "$1"; }
+
+# 장부와 실패기록은 읽고-고쳐-쓰기라 두 프로세스가 겹치면 한쪽 기록이 사라진다.
+# watch 가 부팅 작업으로 돌면서 수동 migrate 와 겹치는 것은 정상 시나리오다.
+with_state_lock() {
+  local d="$STATE_DIR/.lock" i=0
+  while ! mkdir "$d" 2>/dev/null; do
+    i=$((i + 1))
+    # 죽은 프로세스가 남긴 잠금은 걷어낸다. 아니면 영영 못 쓴다.
+    if [ "$i" -gt 100 ]; then rm -rf "$d" 2>/dev/null; i=0; fi
+    sleep 0.05
+  done
+  "$@"; local rc=$?
+  rmdir "$d" 2>/dev/null
+  return $rc
+}
 
 # 폴더 목록을 한 줄에 하나씩 내보낸다. 줄바꿈을 우선하고, 그 줄이 통째로는
 # 폴더가 아닐 때만 공백으로 쪼갠다. 공백으로 먼저 쪼개면 'DCIM/My Photos' 같은
@@ -227,21 +242,31 @@ attempts_of() {
   awk -F'\t' -v k="$key" '$1==k {print $2}' "$FAILURES" | tail -n1
 }
 
-record_failure() {
-  local key="$1" n
+_record_failure() {
+  local key="$1" n tmp="$FAILURES.$$.tmp"
   n=$(attempts_of "$key"); n=${n:-0}
   n=$((n + 1))
-  local tmp="$FAILURES.tmp"
   awk -F'\t' -v k="$key" '$1!=k' "$FAILURES" > "$tmp" 2>/dev/null || : > "$tmp"
   printf '%s\t%s\n' "$key" "$n" >> "$tmp"
   mv "$tmp" "$FAILURES"
 }
+record_failure() { with_state_lock _record_failure "$1"; }
 
-clear_failure() {
-  local key="$1" tmp="$FAILURES.tmp"
+_clear_failure() {
+  local key="$1" tmp="$FAILURES.$$.tmp"
   awk -F'\t' -v k="$key" '$1!=k' "$FAILURES" > "$tmp" 2>/dev/null || : > "$tmp"
   mv "$tmp" "$FAILURES"
 }
+clear_failure() { with_state_lock _clear_failure "$1"; }
+
+# 장부 한 줄을 통째로 갈아 끼운다. 읽고-고쳐-쓰기라 잠금 안에서만 부른다.
+_ledger_put() {
+  local key="$1" md5="$2" rel="$3" size="$4" mtime="$5" tmp="$LEDGER.$$.tmp"
+  awk -F'\t' -v k="$key" '$1!=k' "$LEDGER" > "$tmp" 2>/dev/null || : > "$tmp"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$md5" "$rel" "$(date '+%Y-%m-%d %H:%M:%S')" "$size" "$mtime" >> "$tmp"
+  mv "$tmp" "$LEDGER"
+}
+ledger_put() { with_state_lock _ledger_put "$@"; }
 
 # 드라이브 안에서 이 파일이 놓일 폴더를 정한다.
 #   date   : PhoneCamera/2026/2026-08
@@ -407,10 +432,7 @@ copy_file() {
   # 미분류로 갔던 전사가 짝 녹음이 생겨도 영영 미분류에 남는다.
   if [ "$seen" = "$lmd5" ] && [ "$seen_dir" = "$rdir" ]; then
     # 내용도 목적지도 그대로, mtime 만 바뀐 경우 — 장부만 갱신하고 넘어간다
-    local t2="$LEDGER.tmp"
-    awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$t2" 2>/dev/null || : > "$t2"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$src" "$lmd5" "$seen_rel" "$(date '+%Y-%m-%d %H:%M:%S')" "$size" "$mtime" >> "$t2"
-    mv "$t2" "$LEDGER"
+    ledger_put "$src" "$lmd5" "$seen_rel" "$size" "$mtime"
     return 2
   fi
 
@@ -437,11 +459,8 @@ copy_file() {
     fi
   fi
 
-  local tmp="$LEDGER.tmp"
-  awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$tmp" 2>/dev/null || : > "$tmp"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$src" "$lmd5" "$UPLOADED_REL" "$(date '+%Y-%m-%d %H:%M:%S')" \
-    "$(stat -c %s "$src" 2>/dev/null)" "$(stat -c %Y "$src" 2>/dev/null)" >> "$tmp"
-  mv "$tmp" "$LEDGER"
+  ledger_put "$src" "$lmd5" "$UPLOADED_REL" \
+    "$(stat -c %s "$src" 2>/dev/null)" "$(stat -c %Y "$src" 2>/dev/null)"
   log INFO "업로드+검증 완료, 폰에는 그대로 둔다: $(basename "$src")"
   return 0
 }
@@ -600,6 +619,9 @@ cmd_migrate() {
     local mattempts
     mattempts=$(attempts_of "$f"); mattempts=${mattempts:-0}
     [ "$mattempts" -ge "$MAX_ATTEMPTS" ] && continue
+    # 아직 기록 중인 파일을 잘린 채 올리고 온전한 원본을 휴지통으로 옮기면
+    # 복구할 방법이 없다. once 가 하는 검사를 여기서도 한다.
+    is_stable "$f" || { n_skip=$((n_skip + 1)); continue; }
     # 도중에 Wi-Fi 가 끊기면 멈춘다. 시작할 때 한 번만 확인하면, 요금을 지키려고
     # 켠 설정이 시작 순간만 지키고 남은 수십 GB 는 셀룰러로 나간다.
     if [ "$REQUIRE_WIFI" = "1" ] && [ $((i % 20)) = 0 ] && ! wifi_ok; then
@@ -822,8 +844,16 @@ cmd_setup() {
   # 2) 사진이 실제로 어디 있는지 찾는다
   echo
   echo "[2/5] 폰에서 사진이 있는 위치를 찾는 중..."
-  roots=$(detect_roots | tr '\n' ' ')
-  MIGRATE_ROOTS="$roots"
+  # 사용자가 범위를 좁혀 뒀다면 지킨다. 다른 설정은 다 지키면서 이것만 되돌리면
+  # 문서가 권하는 '범위 좁히기'가 setup 한 번에 무효가 된다.
+  if [ -n "${_ENVSET_MIGRATE_ROOTS-}" ] || \
+     { [ -f "$CONFIG_FILE" ] && grep -q '^MIGRATE_ROOTS=' "$CONFIG_FILE"; }; then
+    roots="$MIGRATE_ROOTS"
+    echo "  (설정에 지정된 이관 범위를 그대로 쓴다)"
+  else
+    roots=$(detect_roots | tr '\n' ' ')
+    MIGRATE_ROOTS="$roots"
+  fi
   dirs=$(detect_photo_dirs)
   if [ -z "$dirs" ]; then
     echo "  사진을 한 장도 못 찾았다. 검사 범위: $roots"
@@ -1400,7 +1430,19 @@ cmd_doctor() {
     echo "         → 'photo-autobackup.sh setup' 을 실행하면 자동으로 다시 잡는다"
     ok=0
   fi
-  [ "$REQUIRE_WIFI" = "1" ] && { have termux-wifi-connectioninfo && echo "  [OK] Wi-Fi 전용 모드 판정 가능" || { echo "  [실패] REQUIRE_WIFI=1인데 termux-api가 없어 업로드가 계속 보류된다"; ok=0; }; }
+  if [ "$REQUIRE_WIFI" = "1" ]; then
+    if ! have termux-wifi-connectioninfo; then
+      echo "  [실패] REQUIRE_WIFI=1인데 termux-api가 없어 업로드가 계속 보류된다"; ok=0
+    elif termux-wifi-connectioninfo >/dev/null 2>&1; then
+      echo "  [OK] Wi-Fi 전용 모드 판정 가능"
+    else
+      # 명령이 있어도 위치 권한이 없으면 실패한다. 존재만 보고 [OK] 를 찍으면
+      # 실제로는 계속 보류되는데 "바로 쓸 수 있다"고 말하게 된다.
+      echo "  [실패] Wi-Fi 상태를 읽지 못한다(권한 문제). 업로드가 계속 보류된다."
+      echo "         설정 > 애플리케이션 > Termux:API > 권한 > 위치 허용"
+      ok=0
+    fi
+  fi
 
   echo
   if [ "$ok" = "1" ]; then

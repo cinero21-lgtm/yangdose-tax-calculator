@@ -657,7 +657,7 @@ rm -f "$CALLDIR"/*
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 rm -f "$CALLDIR"/* 2>/dev/null
 
-echo "== 63. 배포 설정과 스크립트 기본값이 어긋나면 실패한다 (계열 전체) =="
+echo "== 63. 배포 설정과 스크립트 기본값이 어긋나면 실패한다 (모든 키) =="
 # 지금까지 세 번 연속으로 "스크립트만 고치고 배포 설정은 안 고침" 이 나왔다.
 # 키 하나씩 확인하지 말고, 두 파일에 다 있는 키는 전부 같은지 기계적으로 본다.
 SCRIPT="$SKILL/scripts/photo-autobackup.sh"
@@ -673,9 +673,9 @@ while IFS= read -r key; do
   if [ "$v_s" != "$v_c" ]; then
     mismatch=$((mismatch + 1)); mismatch_keys="$mismatch_keys $key"
   fi
-done < <(grep -oE '^(CALL|TRANSCRIPT)_[A-Z_]+' "$SCRIPT" | sort -u)
+done < <(grep -oE '^[A-Z][A-Z0-9_]+(?==)' "$SCRIPT" 2>/dev/null | sort -u || grep -oE '^[A-Z][A-Z0-9_]+=' "$SCRIPT" | tr -d '=' | sort -u)
 [ "$mismatch" = "0" ] || echo "    어긋난 키:$mismatch_keys"
-check "CALL_/TRANSCRIPT_ 키 전부 일치" 0 "$mismatch"
+check "배포 설정과 기본값 전 키 일치" 0 "$mismatch"
 
 echo "== 64. Recordings/Call 이 없는 기기에서 음성메모를 빨아들이지 않는다 =="
 ALT="$SHARED/AltRec"
@@ -940,6 +940,69 @@ echo "audio" > "$CALLDIR/수신 사본정리 260819.m4a"
 check "제자리로 옮겨짐"           1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 사본정리 260819.txt" 2>/dev/null | wc -l)"
 check "미분류의 옛 사본 제거됨"   0 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/수신 사본정리 260819.txt" 2>/dev/null | wc -l)"
 rm -f "$CALLDIR"/*
+
+# ============ 8차 감수 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+
+echo "== 86. 배포 설정의 VIDEO_EXTENSIONS 에 3gp 가 없다 =="
+check "3gp 가 동영상 목록에 없음" 0 "$(grep -c '^VIDEO_EXTENSIONS=.*3gp' "$SKILL/scripts/config.example.env")"
+
+echo "== 87. setup 이 좁혀 둔 이관 범위를 되돌리지 않는다 =="
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfgB.bak"
+NARROW="$SHARED/DCIM"
+sed -i "s|^MIGRATE_ROOTS=.*|MIGRATE_ROOTS=\"$NARROW\"|" "$HOME/.config/photo-autobackup/config.env"
+"$SKILL/scripts/photo-autobackup.sh" setup "Z폴드 8 사진" "Z폴드 8 동영상" >/dev/null 2>&1
+check "좁힌 범위 보존"            1 "$(grep -c "^MIGRATE_ROOTS=\"$NARROW\"" "$HOME/.config/photo-autobackup/config.env")"
+cp "$ROOT/cfgB.bak" "$HOME/.config/photo-autobackup/config.env"
+
+echo "== 88. migrate 도 기록 중인 파일을 건드리지 않는다 =="
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfgC.bak"
+sed -i 's/^MIN_AGE_SECONDS=.*/MIN_AGE_SECONDS=3600/' "$HOME/.config/photo-autobackup/config.env"
+mkdir -p "$SHARED/DCIM/Camera"
+echo "방금생성" > "$SHARED/DCIM/Camera/기록중.jpg"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "갓 만든 파일은 건드리지 않음" 1 "$(ls "$SHARED/DCIM/Camera/기록중.jpg" 2>/dev/null | wc -l)"
+check "휴지통에도 없음"           0 "$(find "$TRASH" -name '기록중.jpg' 2>/dev/null | wc -l)"
+cp "$ROOT/cfgC.bak" "$HOME/.config/photo-autobackup/config.env"
+rm -f "$SHARED/DCIM/Camera/기록중.jpg"
+
+echo "== 89. doctor 가 Wi-Fi 판정을 '실제로' 해 보고 말한다 =="
+cat > "$ROOT/bin/termux-wifi-connectioninfo" <<'WIFI'
+#!/usr/bin/env bash
+[ "${WIFI_BROKEN:-0}" = "1" ] && exit 1
+echo '{"supplicant_state": "COMPLETED"}'
+WIFI
+chmod +x "$ROOT/bin/termux-wifi-connectioninfo"
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfgD.bak"
+echo 'REQUIRE_WIFI=1' >> "$HOME/.config/photo-autobackup/config.env"
+out=$(WIFI_BROKEN=1 "$SKILL/scripts/photo-autobackup.sh" doctor 2>&1)
+check "권한 없으면 실패로 보고"    1 "$(echo "$out" | grep -c 'Wi-Fi 상태를 읽지 못한다')"
+check "'바로 쓸 수 있다' 안 함"    0 "$(echo "$out" | grep -c '바로 쓸 수 있다')"
+out=$("$SKILL/scripts/photo-autobackup.sh" doctor 2>&1)
+check "정상이면 OK"               1 "$(echo "$out" | grep -c 'Wi-Fi 전용 모드 판정 가능')"
+cp "$ROOT/cfgD.bak" "$HOME/.config/photo-autobackup/config.env"
+rm -f "$ROOT/bin/termux-wifi-connectioninfo"
+
+echo "== 90. 동시에 돌아도 기록이 사라지지 않는다 =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+FAILTSV2="$HOME/.local/share/photo-autobackup/failures.tsv"
+mkdir -p "$SHARED/DCIM/Conc"
+for i in $(seq 1 12); do echo "c$i" > "$SHARED/DCIM/Conc/동시_$i.jpg"; done
+# 두 프로세스가 같은 상태 파일을 동시에 고친다
+( RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1 ) &
+pid1=$!
+( RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1 ) &
+pid2=$!
+wait $pid1 $pid2
+check "실패기록이 12건 다 남음"    12 "$(grep -c '동시_' "$FAILTSV2")"
+check "장부 파일이 깨지지 않음"    0 "$(awk -F'\t' 'NF>0 && NF<2' "$FAILTSV2" | wc -l | tr -d ' ')"
+rm -rf "$SHARED/DCIM/Conc"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
+echo "== 91. bootstrap 도 브랜치 하나에 매여 있지 않다 =="
+check "main 우선 시도"            1 "$(grep -c 'RAW_BASE/main/\$RAW_PATH' "$SKILL/scripts/bootstrap.sh")"
 
 echo
 echo "합계: PASS=$pass FAIL=$fail"

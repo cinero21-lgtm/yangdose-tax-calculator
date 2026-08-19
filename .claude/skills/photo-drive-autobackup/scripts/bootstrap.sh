@@ -21,7 +21,14 @@ if [ ! -t 0 ] && [ -z "${PAB_RELAUNCHED:-}" ]; then
   fi
 fi
 
-RAW="https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts"
+# 브랜치가 머지되어 사라져도 설치가 죽지 않게 main 을 먼저 보고 브랜치로 물러선다.
+# update 는 이미 그렇게 하는데 여기만 브랜치에 못박혀 있으면, 문서의 대표 설치
+# 한 줄이 "인터넷을 확인해라"라는 엉뚱한 말과 함께 죽는다.
+RAW_BASE="https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator"
+RAW_PATH=".claude/skills/photo-drive-autobackup/scripts"
+RAW="$RAW_BASE/main/$RAW_PATH"
+curl -fsSL "$RAW/photo-autobackup.sh" -o /dev/null 2>/dev/null || \
+  RAW="$RAW_BASE/claude/auto-photo-upload-delete-4prnja/$RAW_PATH"
 BIN_DIR="$HOME/bin"
 
 say() { printf '\n=== %s\n' "$*"; }
