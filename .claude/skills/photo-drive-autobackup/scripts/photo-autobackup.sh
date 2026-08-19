@@ -5,9 +5,15 @@
 # 옮긴다. 해시를 확인할 수 없으면 실패로 간주하고 원본을 건드리지 않는다(fail-closed).
 # 완전 삭제는 보관 기간이 지난 뒤 purge 단계에서만 일어난다.
 
+# sh/dash 로 실행되면 bash 문법에서 조용히 깨진다. 명확히 알려주고 멈춘다.
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "이 스크립트는 bash 로 실행해야 한다:  bash $0 $*" >&2
+  exit 1
+fi
+
 set -uo pipefail
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값

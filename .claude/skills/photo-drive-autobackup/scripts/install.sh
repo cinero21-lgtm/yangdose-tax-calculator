@@ -30,7 +30,23 @@ fi
 say "3/5 스크립트 배치"
 mkdir -p "$BIN_DIR"
 install -m 755 "$SRC_DIR/photo-autobackup.sh" "$BIN_DIR/photo-autobackup.sh"
+
+# 안드로이드에는 /usr/bin 이 없다. termux-exec 가 shebang 을 대신 고쳐 주긴 하지만
+# 항상 켜져 있다고 믿을 수 없어서, 설치 시점에 실제 bash 경로로 박아 둔다.
+REAL_BASH="$(command -v bash)"
+if [ -n "$REAL_BASH" ] && [ "$REAL_BASH" != "/usr/bin/bash" ]; then
+  sed -i "1s|^#!.*|#!$REAL_BASH|" "$BIN_DIR/photo-autobackup.sh"
+  echo "  shebang 고정: $REAL_BASH"
+fi
 echo "  설치됨: $BIN_DIR/photo-autobackup.sh"
+
+# PATH 에 ~/bin 이 없으면 명령 이름만으로 못 부른다. 한 번만 추가한다.
+if ! printf '%s' "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
+  grep -qs 'photo-autobackup PATH' "$HOME/.bashrc" 2>/dev/null || \
+    printf '\n# photo-autobackup PATH\nexport PATH="$HOME/bin:$PATH"\n' >> "$HOME/.bashrc"
+  export PATH="$BIN_DIR:$PATH"
+  echo "  PATH 에 $BIN_DIR 추가 (새 터미널부터 'photo-autobackup.sh' 로 바로 호출 가능)"
+fi
 
 say "4/5 설정 파일"
 mkdir -p "$CONFIG_DIR"
@@ -43,10 +59,10 @@ fi
 
 say "5/5 부팅 시 자동 실행"
 mkdir -p "$BOOT_DIR"
-cat > "$BOOT_DIR/photo-autobackup.sh" <<'BOOT'
-#!/data/data/com.termux/files/usr/bin/sh
+cat > "$BOOT_DIR/photo-autobackup.sh" <<BOOT
+#!${PREFIX:-/data/data/com.termux/files/usr}/bin/sh
 termux-wake-lock
-exec "$HOME/bin/photo-autobackup.sh" watch
+exec "\$HOME/bin/photo-autobackup.sh" watch
 BOOT
 chmod +x "$BOOT_DIR/photo-autobackup.sh"
 echo "  등록됨: $BOOT_DIR/photo-autobackup.sh"
