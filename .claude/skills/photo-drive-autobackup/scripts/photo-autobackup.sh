@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.7.0"
+VERSION="1.7.2"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -53,7 +53,7 @@ CALL_DRIVE_IN="수신녹취"
 CALL_DRIVE_OUT="발신통화녹취"
 CALL_DRIVE_UNKNOWN="통화녹취_미분류"
 CALL_IN_PATTERN="수신|받은|incoming|_in_|^in[-_]"
-CALL_OUT_PATTERN="발신|건|outgoing|_out_|^out[-_]"
+CALL_OUT_PATTERN="발신|보낸|outgoing|_out_|^out[-_]"
 CALL_LOG_WINDOW=90                 # 통화기록 대조 허용 오차(초)
 
 load_config() {
@@ -243,7 +243,7 @@ remote_md5() {
 # 성공 시 0 을 돌려주고 UPLOADED_REL 에 최종 원격 경로(폴더/파일명)를 담는다.
 UPLOADED_REL=""
 upload_and_verify() {
-  local src="$1" rdir="$2"
+  local src="$1" rdir="$2" conflict="${3:-rename}"
   local base rpath lmd5 rmd5
   UPLOADED_REL=""
 
@@ -254,7 +254,7 @@ upload_and_verify() {
 
   # 같은 이름이 이미 있으면: 내용이 같으면 업로드 생략, 다르면 이름을 구분해 준다.
   rmd5=$(remote_md5 "$rpath")
-  if [ -n "$rmd5" ] && [ "$rmd5" != "$lmd5" ]; then
+  if [ -n "$rmd5" ] && [ "$rmd5" != "$lmd5" ] && [ "$conflict" = "rename" ]; then
     local stem ext
     stem="${base%.*}"; ext="${base##*.}"
     if [ "$stem" = "$base" ]; then base="${base}-${lmd5:0:8}"
@@ -320,7 +320,7 @@ process_file() {
 # 파일이 계속 남으므로, 매번 원격 해시를 물어보면 통화 수가 쌓일수록 느려진다.
 # 올린 것을 장부에 적어 두고 내용이 그대로면 통신 없이 건너뛴다.
 copy_file() {
-  local src="$1" rdir="$2"
+  local src="$1" rdir="$2" conflict="${3:-rename}"
   local lmd5 seen
 
   lmd5=$(md5_of "$src")
@@ -331,7 +331,7 @@ copy_file() {
     return 2   # 이미 올렸고 내용도 그대로 — 조용히 넘어간다
   fi
 
-  upload_and_verify "$src" "$rdir" || return 1
+  upload_and_verify "$src" "$rdir" "$conflict" || return 1
 
   local tmp="$LEDGER.tmp"
   awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$tmp" 2>/dev/null || : > "$tmp"
@@ -519,8 +519,14 @@ cmd_watch() {
     [ "$CALL_ENABLED" = "1" ] && cmd_calls >/dev/null 2>&1
     if have inotifywait; then
       # 새 파일이 생기면 즉시 깨어나고, 아무 일 없으면 주기마다 한 번 돈다.
-      # shellcheck disable=SC2086
-      inotifywait -q -e close_write,moved_to -t "$POLL_SECONDS" $WATCH_DIRS >/dev/null 2>&1
+      # 통화녹취를 켰다면 녹음 폴더도 함께 지켜본다 — 안 그러면 "통화가 끝나면
+      # 바로 올라간다"가 실제로는 폴링 주기만큼 늦는다.
+      local wdirs=()
+      while IFS= read -r _d; do [ -n "$_d" ] && wdirs+=("$_d"); done < <(printf '%s\n' $WATCH_DIRS)
+      if [ "$CALL_ENABLED" = "1" ]; then
+        while IFS= read -r _d; do [ -n "$_d" ] && wdirs+=("$_d"); done < <(discover_call_dirs)
+      fi
+      inotifywait -q -e close_write,moved_to -t "$POLL_SECONDS" "${wdirs[@]}" >/dev/null 2>&1
       sleep "$MIN_AGE_SECONDS"
     else
       sleep "$POLL_SECONDS"
@@ -694,6 +700,18 @@ MIGRATE_LAYOUT="mirror"
 EXTENSIONS="$EXTENSIONS"
 VIDEO_EXTENSIONS="$VIDEO_EXTENSIONS"
 VIDEO_DRIVE_FOLDER="$vfolder"
+
+# 통화녹취 — 기존 설정을 그대로 물려받는다(setup 을 다시 돌려도 꺼지지 않는다)
+CALL_ENABLED=$CALL_ENABLED
+CALL_DIRS="$CALL_DIRS"
+CALL_EXTENSIONS="$CALL_EXTENSIONS"
+TRANSCRIPT_EXTENSIONS="$TRANSCRIPT_EXTENSIONS"
+CALL_DRIVE_IN="$CALL_DRIVE_IN"
+CALL_DRIVE_OUT="$CALL_DRIVE_OUT"
+CALL_DRIVE_UNKNOWN="$CALL_DRIVE_UNKNOWN"
+CALL_IN_PATTERN="$CALL_IN_PATTERN"
+CALL_OUT_PATTERN="$CALL_OUT_PATTERN"
+CALL_LOG_WINDOW=$CALL_LOG_WINDOW
 MIN_AGE_SECONDS=$MIN_AGE_SECONDS
 POLL_SECONDS=$POLL_SECONDS
 RETENTION_DAYS=$RETENTION_DAYS
@@ -759,35 +777,84 @@ GUIDE
 # 녹음 폴더는 기종·One UI 버전마다 다르다. 하나를 고정하면 다른 기기에서 통째로
 # 실패하므로, 있는 것만 골라 쓴다.
 discover_call_dirs() {
-  local d real shared
+  local d real shared picked=() p dup
   if [ -n "$CALL_DIRS" ]; then
-    for d in $CALL_DIRS; do
-      real=$(resolve_dir "$d"); [ -d "$real" ] && printf '%s\n' "$real"
+    # 줄바꿈으로 나눠 읽는다. 공백이 든 경로(`Call recordings`)를 단어로 쪼개면
+    # 존재하지 않는 경로가 되어 "폴더를 못 찾았다"로 끝난다.
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      real=$(resolve_dir "$d")
+      if [ -d "$real" ]; then
+        picked+=("$real")
+      else
+        # 한 줄에 여러 경로를 공백으로 적은 경우를 위한 편의 처리. 공백이 든
+        # 경로가 우선이므로, 통째로 폴더가 아닐 때만 쪼개 본다.
+        local w
+        for w in $d; do
+          real=$(resolve_dir "$w"); [ -d "$real" ] && picked+=("$real")
+        done
+      fi
+    done < <(printf '%s\n' "$CALL_DIRS")
+  else
+    shared=$(resolve_dir "$HOME/storage/shared")
+    for d in "$shared/Recordings/Call" "$shared/Recordings" "$shared/Call" "$shared/Sounds"; do
+      [ -d "$d" ] && picked+=("$d")
     done
-    return
   fi
-  shared=$(resolve_dir "$HOME/storage/shared")
-  for d in "$shared/Recordings/Call" "$shared/Recordings" "$shared/Call" "$shared/Sounds"; do
-    [ -d "$d" ] && printf '%s\n' "$d"
+  # Recordings/Call 과 Recordings 를 둘 다 내보내면 같은 파일을 두 번 훑는다.
+  # 해시 계산과 안정성 대기(1초)와 통화기록 조회가 전부 두 배가 된다.
+  for d in "${picked[@]:-}"; do
+    [ -n "$d" ] || continue
+    dup=0
+    for p in "${picked[@]:-}"; do
+      [ "$p" = "$d" ] && continue
+      case "$d" in "$p"/*) dup=1; break ;; esac
+    done
+    [ "$dup" = "0" ] && printf '%s\n' "$d"
   done
 }
 
 # 통화기록에서 파일 시각과 가장 가까운 항목의 방향을 읽는다.
 # termux-call-log 출력은 JSON 배열이며 각 항목에 type(INCOMING/OUTGOING)과
 # date("2026-08-19 14:32:00")가 들어 있다. jq 없이 처리한다 — 폰에 없을 수 있다.
+# JSON 한 줄에서 값만 뽑는다. 값 안에 콜론이 있는 필드가 있어("00:10:00",
+# "2026-08-19 14:32:00") 마지막 콜론을 구분자로 삼으면 값이 잘린다.
+json_value() {
+  printf '%s' "$1" | sed 's/^[^:]*: *//' | tr -d '",' | sed 's/^ *//; s/ *$//'
+}
+
+# "00:01:30" 또는 "90" 을 초로 바꾼다. 형식은 안드로이드 버전마다 다르다.
+duration_seconds() {
+  local d="$1"
+  case "$d" in
+    *:*:*) printf '%s' "$d" | awk -F: '{print $1*3600 + $2*60 + $3}' ;;
+    *:*)   printf '%s' "$d" | awk -F: '{print $1*60 + $2}' ;;
+    ''|*[!0-9]*) printf '0' ;;
+    *)     printf '%s' "$d" ;;
+  esac
+}
+
 direction_from_call_log() {
-  local mtime="$1" line type date_s epoch diff best_diff="" best=""
+  local mtime="$1" line type date_s dur epoch endt diff best_diff="" best=""
   have termux-call-log || return 1
+  type=""; date_s=""; dur=""
   while IFS= read -r line; do
     case "$line" in
-      *'"type"'*)  type=$(printf '%s' "$line" | sed 's/.*: *"\([^"]*\)".*/\1/') ;;
-      *'"date"'*)
-        date_s=$(printf '%s' "$line" | sed 's/.*: *"\([^"]*\)".*/\1/')
-        epoch=$(date -d "$date_s" +%s 2>/dev/null) || continue
-        diff=$(( mtime > epoch ? mtime - epoch : epoch - mtime ))
+      *'"type"'*)     type=$(json_value "$line") ;;
+      *'"duration"'*) dur=$(json_value "$line") ;;
+      *'"date"'*)     date_s=$(json_value "$line") ;;
+      *'}'*)
+        # 항목 하나가 끝났다. 녹음 파일 mtime 은 통화가 '끝난' 시각이므로
+        # 통화 시작 + 통화 시간 = 종료 시각과 견준다. 통화 시간을 무시하면
+        # 90초 넘는 통화는 전부 판정에 실패한다.
+        [ -n "$date_s" ] || { type=""; dur=""; continue; }
+        epoch=$(date -d "$date_s" +%s 2>/dev/null) || { type=""; date_s=""; dur=""; continue; }
+        endt=$(( epoch + $(duration_seconds "${dur:-0}") ))
+        diff=$(( mtime > endt ? mtime - endt : endt - mtime ))
         if [ -z "$best_diff" ] || [ "$diff" -lt "$best_diff" ]; then
           best_diff="$diff"; best="$type"
-        fi ;;
+        fi
+        type=""; date_s=""; dur="" ;;
     esac
   done < <(termux-call-log -l 50 2>/dev/null)
   [ -n "$best_diff" ] || return 1
@@ -820,13 +887,25 @@ call_folder_for() {
 }
 
 # 녹음 파일과 같은 이름의 전사 파일을 찾는다. 없으면 빈 문자열.
-transcript_for() {
-  local audio="$1" stem ext cand
+# 짝이 되는 전사 파일을 '전부' 돌려준다. .txt 와 .json 이 함께 나오는 앱이 있는데
+# 하나만 올리면 나머지는 영영 누락된다.
+transcripts_for() {
+  local audio="$1" stem ext cand found=1
   stem="${audio%.*}"
   for ext in $TRANSCRIPT_EXTENSIONS; do
     for cand in "$stem.$ext" "$stem.${ext^^}"; do
-      [ -f "$cand" ] && { printf '%s' "$cand"; return 0; }
+      [ -f "$cand" ] && { printf '%s\n' "$cand"; found=0; }
     done
+  done
+  return $found
+}
+
+# 이 녹음에 짝이 되는 오디오가 있는지 (대소문자 무관)
+has_paired_audio() {
+  local stem="${1%.*}" ext
+  for ext in $CALL_EXTENSIONS; do
+    [ -f "$stem.$ext" ] && return 0
+    [ -f "$stem.${ext^^}" ] && return 0
   done
   return 1
 }
@@ -873,23 +952,22 @@ cmd_calls() {
     [ -f "$f" ] || continue
     is_stable "$f" || { n_skip=$((n_skip + 1)); continue; }
 
+    local attempts
+    attempts=$(attempts_of "$f"); attempts=${attempts:-0}
+    if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then n_skip=$((n_skip + 1)); continue; fi
+
     local dir folder rdir tr rc
     if is_transcript "$f"; then
       seen_tr=$((seen_tr + 1))
       # 짝이 되는 녹음이 있으면 그 녹음을 처리할 때 함께 올린다. 여기서는 건너뛴다.
-      local stem has_audio=0 ext
-      stem="${f%.*}"
-      for ext in $CALL_EXTENSIONS; do
-        [ -f "$stem.$ext" ] && { has_audio=1; break; }
-      done
-      [ "$has_audio" = "1" ] && continue
+      has_paired_audio "$f" && continue
       # 짝 없는 전사 — 미분류로 올린다. 버리면 안 되는 자료다.
       rdir=$(call_remote_dir "$f" "$CALL_DRIVE_UNKNOWN")
-      copy_file "$f" "$rdir"; rc=$?
+      copy_file "$f" "$rdir" overwrite; rc=$?
       case $rc in
-        0) n_up=$((n_up + 1)); n_tr=$((n_tr + 1)) ;;
+        0) clear_failure "$f"; n_up=$((n_up + 1)); n_tr=$((n_tr + 1)) ;;
         2) n_skip=$((n_skip + 1)) ;;
-        *) n_fail=$((n_fail + 1)) ;;
+        *) record_failure "$f"; n_fail=$((n_fail + 1)) ;;
       esac
       continue
     fi
@@ -900,21 +978,22 @@ cmd_calls() {
 
     copy_file "$f" "$rdir"; rc=$?
     case $rc in
-      0) n_up=$((n_up + 1)) ;;
+      0) clear_failure "$f"; n_up=$((n_up + 1)) ;;
       2) n_skip=$((n_skip + 1)) ;;
-      *) n_fail=$((n_fail + 1)); continue ;;
+      *) record_failure "$f"; n_fail=$((n_fail + 1)); continue ;;
     esac
 
     # 전사 파일은 녹음과 같은 폴더로 함께 올린다. 짝이 떨어지면 나중에 못 찾는다.
-    if tr=$(transcript_for "$f"); then
+    while IFS= read -r tr; do
+      [ -n "$tr" ] || continue
       seen_tr=$((seen_tr + 1))
-      copy_file "$tr" "$rdir"; rc=$?
+      copy_file "$tr" "$rdir" overwrite; rc=$?
       case $rc in
         0) n_up=$((n_up + 1)); n_tr=$((n_tr + 1)) ;;
         2) : ;;
         *) n_fail=$((n_fail + 1)) ;;
       esac
-    fi
+    done < <(transcripts_for "$f")
   done < <(find_call_files)
 
   log INFO "통화녹취 스윕 종료 — 업로드 $n_up건(전사 $n_tr), 건너뜀 $n_skip건, 실패 $n_fail건"

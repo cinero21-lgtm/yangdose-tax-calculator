@@ -386,6 +386,93 @@ check "드라이브 변화 없음"       "$snap_remote" "$(find "$ROOT/remote" -
 check "녹음 폴더 보고"           1 "$(echo "$out" | grep -c '녹음 폴더 후보')"
 check "전사 파일 절 출력"        1 "$(echo "$out" | grep -c '전사(텍스트) 파일')"
 
+# ============ 감수 지적사항 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+
+echo "== 40. 이름 한 글자로 방향을 정하지 않는다 =="
+echo "a" > "$CALLDIR/김건우 통화 260819.m4a"
+echo "b" > "$CALLDIR/건강보험공단 260819.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "김건우는 발신 아님"       0 "$(ls "$ROOT/remote/발신통화녹취/$YM/김건우 통화 260819.m4a" 2>/dev/null | wc -l)"
+check "건강보험공단도 발신 아님" 0 "$(ls "$ROOT/remote/발신통화녹취/$YM/건강보험공단 260819.m4a" 2>/dev/null | wc -l)"
+check "둘 다 미분류로"           2 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/" 2>/dev/null | grep -cE '김건우|건강보험')"
+
+echo "== 41. 대문자 확장자 녹음의 전사도 같은 폴더로 =="
+echo "audio" > "$CALLDIR/수신 대문자 260819.M4A"
+echo "전사" > "$CALLDIR/수신 대문자 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "녹음 수신녹취로"          1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 대문자 260819.M4A" 2>/dev/null | wc -l)"
+check "전사도 같은 폴더로"       1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 대문자 260819.txt" 2>/dev/null | wc -l)"
+check "전사가 미분류로 안 감"    0 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/수신 대문자 260819.txt" 2>/dev/null | wc -l)"
+
+echo "== 42. 사이드카가 둘이면 둘 다 올린다 =="
+echo "audio" > "$CALLDIR/수신 둘 260819.m4a"
+echo "텍스트" > "$CALLDIR/수신 둘 260819.txt"
+echo '{"t":1}' > "$CALLDIR/수신 둘 260819.json"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "txt 업로드"               1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 둘 260819.txt" 2>/dev/null | wc -l)"
+check "json 도 업로드"           1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 둘 260819.json" 2>/dev/null | wc -l)"
+
+echo "== 43. 전사가 갱신되면 이름을 유지한 채 덮어쓴다 =="
+echo "전사 수정본" > "$CALLDIR/수신 둘 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "해시 접미사 안 붙음"      0 "$(ls "$ROOT/remote/수신녹취/$YM/" 2>/dev/null | grep -c '수신 둘 260819-')"
+check "내용이 갱신됨"            "전사 수정본" "$(cat "$ROOT/remote/수신녹취/$YM/수신 둘 260819.txt")"
+
+echo "== 44. 90초 넘는 통화도 통화기록으로 판정한다 =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+cat > "$ROOT/bin/termux-call-log" <<'TCL'
+#!/usr/bin/env bash
+# 통화 시작은 파일 mtime 보다 10분 앞, 통화 시간 10분 → 종료가 mtime 과 일치
+start=$(( $(stat -c %Y "$CALL_LOG_TARGET") - 600 ))
+printf '[\n  {\n    "type": "INCOMING",\n    "date": "%s",\n    "duration": "00:10:00"\n  }\n]\n' \
+  "$(date -d "@$start" '+%Y-%m-%d %H:%M:%S')"
+TCL
+chmod +x "$ROOT/bin/termux-call-log"
+echo "long-call" > "$CALLDIR/20260819_170000.m4a"
+export CALL_LOG_TARGET="$CALLDIR/20260819_170000.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "10분 통화도 수신 판정"    1 "$(ls "$ROOT/remote/수신녹취/$YM/20260819_170000.m4a" 2>/dev/null | wc -l)"
+check "미분류로 안 감"           0 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/20260819_170000.m4a" 2>/dev/null | wc -l)"
+rm -f "$ROOT/bin/termux-call-log"; unset CALL_LOG_TARGET
+
+echo "== 45. setup 을 다시 돌려도 CALL_ENABLED 가 꺼지지 않는다 =="
+check "실행 전 켜짐"             1 "$(grep -c '^CALL_ENABLED=1' "$HOME/.config/photo-autobackup/config.env")"
+"$SKILL/scripts/photo-autobackup.sh" setup "Z폴드 8 사진" "Z폴드 8 동영상" >/dev/null 2>&1
+check "실행 후에도 켜짐"         1 "$(grep -c '^CALL_ENABLED=1' "$HOME/.config/photo-autobackup/config.env")"
+check "폴더 설정도 보존"         1 "$(grep -c '^CALL_DRIVE_IN="수신녹취"' "$HOME/.config/photo-autobackup/config.env")"
+
+echo "== 46. 실패가 쌓이면 재시도를 멈춘다 (데이터 낭비 방지) =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/*
+echo "bad" > "$CALLDIR/수신 계속실패 260819.m4a"
+for i in 1 2 3 4 5; do RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1; done
+out=$(RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "6회차는 시도조차 안 함"   1 "$(echo "$out" | grep -c '실패 0건')"
+check "건너뜀으로 집계"          1 "$(echo "$out" | grep -cE '건너뜀 [1-9]')"
+
+echo "== 47. 상위/하위 폴더를 이중으로 훑지 않는다 =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/*
+echo "dedupe" > "$CALLDIR/수신 중복확인 260819.m4a"
+out=$("$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "업로드 1건 (2건 아님)"    1 "$(echo "$out" | grep -c '업로드 1건')"
+
+echo "== 48. 공백이 든 CALL_DIRS 경로도 인식한다 =="
+SPACED="$SHARED/Call recordings"
+mkdir -p "$SPACED"
+echo "spaced" > "$SPACED/수신 공백폴더 260819.m4a"
+# 설정 파일이 환경변수보다 우선한다(이 스크립트의 기존 규칙). 실제 사용 경로대로
+# 설정 파일에 적어서 시험한다.
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg.bak"
+printf 'CALL_DIRS="%s"\n' "$SPACED" >> "$HOME/.config/photo-autobackup/config.env"
+out=$("$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "폴더 못 찾음 오류 없음"   0 "$(echo "$out" | grep -c '녹음 폴더를 찾지 못했다')"
+check "공백 경로에서 업로드"     1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 공백폴더 260819.m4a" 2>/dev/null | wc -l)"
+cp "$ROOT/cfg.bak" "$HOME/.config/photo-autobackup/config.env"
+rm -rf "$SPACED"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
