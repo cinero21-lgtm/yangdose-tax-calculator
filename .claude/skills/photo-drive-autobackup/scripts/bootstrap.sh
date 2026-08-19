@@ -51,12 +51,31 @@ REAL_BASH="$(command -v bash)"
 [ -n "$REAL_BASH" ] && sed -i "1s|^#!.*|#!$REAL_BASH|" "$BIN_DIR/photo-autobackup.sh"
 echo "  설치됨: $BIN_DIR/photo-autobackup.sh"
 
-# 명령 이름만으로 부를 수 있게 PATH 등록 (한 번만)
-if ! printf '%s' "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
-  grep -qs 'photo-autobackup PATH' "$HOME/.bashrc" 2>/dev/null || \
-    printf '\n# photo-autobackup PATH\nexport PATH="$HOME/bin:$PATH"\n' >> "$HOME/.bashrc"
-  export PATH="$BIN_DIR:$PATH"
+# 명령 이름만으로 부를 수 있게 만든다.
+#
+# ~/bin 은 Termux 기본 PATH 에 없다. .bashrc 에 export 를 넣는 방식은, Termux 가
+# 로그인 셸로 뜨면 ~/.bash_profile/~/.profile 만 읽고 .bashrc 를 건너뛸 수 있어
+# 재시작 후 'command not found' 로 되돌아간다(실기기에서 실제로 그랬다).
+#
+# $PREFIX/bin 은 Termux 가 언제나 PATH 에 두는 디렉터리다. 거기에 심볼릭 링크를
+# 걸면 셸 설정과 무관하게 항상 잡힌다. 이게 1차 수단이고, PATH 등록은 보조다.
+LINKED=0
+if [ -n "${PREFIX:-}" ] && [ -d "$PREFIX/bin" ] && [ -w "$PREFIX/bin" ]; then
+  if ln -sf "$BIN_DIR/photo-autobackup.sh" "$PREFIX/bin/photo-autobackup.sh" 2>/dev/null; then
+    echo "  링크됨: \$PREFIX/bin/photo-autobackup.sh  (셸 재시작해도 항상 잡힌다)"
+    LINKED=1
+  fi
 fi
+
+# 링크가 안 된 환경을 위한 보조 경로. 로그인 셸도 읽도록 .profile 에도 넣는다.
+if [ "$LINKED" = "0" ]; then
+  for rc in "$HOME/.bashrc" "$HOME/.profile"; do
+    grep -qs 'photo-autobackup PATH' "$rc" 2>/dev/null || \
+      printf '\n# photo-autobackup PATH\nexport PATH="$HOME/bin:$PATH"\n' >> "$rc"
+  done
+  echo "  PATH 등록: ~/.bashrc, ~/.profile  (새 세션부터 적용)"
+fi
+export PATH="$BIN_DIR:$PATH"
 
 say "3/4 부팅 시 자동 실행 등록"
 mkdir -p "$HOME/.termux/boot"

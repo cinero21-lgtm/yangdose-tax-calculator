@@ -29,6 +29,24 @@ MediaStore 색인이 안 지워진 것이다. `termux-api` 패키지와 Termux:A
    crontab -e     # 15분마다:  */15 * * * * $HOME/bin/photo-autobackup.sh once
    ```
 
+## `photo-autobackup.sh: command not found`
+
+설치는 됐는데 셸이 못 찾는 것이다. 먼저 전체 경로로 되는지 본다:
+
+```sh
+~/bin/photo-autobackup.sh status
+```
+
+이게 되면 PATH 문제다. `$PREFIX/bin` 에 링크를 걸면 셸 설정과 무관하게 항상 잡힌다:
+
+```sh
+ln -sf ~/bin/photo-autobackup.sh $PREFIX/bin/photo-autobackup.sh
+```
+
+`~/.bashrc` 에 `export PATH` 를 넣는 방식은 믿을 게 못 된다. Termux 가 로그인 셸로
+뜨면 `~/.bash_profile` 이나 `~/.profile` 만 읽고 `.bashrc` 를 건너뛰어서, 처음엔
+되다가 앱을 껐다 켜면 다시 안 되는 일이 생긴다. 실기기에서 그렇게 재발했다.
+
 ## 재부팅하면 자동으로 안 뜬다
 
 Termux:Boot 앱은 설치만으로는 등록되지 않는다. **한 번 열어야** 부팅 수신이 활성화된다.

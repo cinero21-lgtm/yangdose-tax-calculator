@@ -40,12 +40,18 @@ if [ -n "$REAL_BASH" ] && [ "$REAL_BASH" != "/usr/bin/bash" ]; then
 fi
 echo "  설치됨: $BIN_DIR/photo-autobackup.sh"
 
-# PATH 에 ~/bin 이 없으면 명령 이름만으로 못 부른다. 한 번만 추가한다.
-if ! printf '%s' "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
-  grep -qs 'photo-autobackup PATH' "$HOME/.bashrc" 2>/dev/null || \
-    printf '\n# photo-autobackup PATH\nexport PATH="$HOME/bin:$PATH"\n' >> "$HOME/.bashrc"
+# $PREFIX/bin 은 Termux 가 항상 PATH 에 두므로, 링크가 가장 확실하다.
+# .bashrc 에만 의존하면 로그인 셸에서 건너뛰어 재시작 후 command not found 가 난다.
+if [ -n "${PREFIX:-}" ] && [ -w "$PREFIX/bin" ] && \
+   ln -sf "$BIN_DIR/photo-autobackup.sh" "$PREFIX/bin/photo-autobackup.sh" 2>/dev/null; then
+  echo "  링크됨: \$PREFIX/bin/photo-autobackup.sh (셸 재시작해도 항상 잡힌다)"
+else
+  for rc in "$HOME/.bashrc" "$HOME/.profile"; do
+    grep -qs 'photo-autobackup PATH' "$rc" 2>/dev/null || \
+      printf '\n# photo-autobackup PATH\nexport PATH="$HOME/bin:$PATH"\n' >> "$rc"
+  done
   export PATH="$BIN_DIR:$PATH"
-  echo "  PATH 에 $BIN_DIR 추가 (새 터미널부터 'photo-autobackup.sh' 로 바로 호출 가능)"
+  echo "  PATH 등록: ~/.bashrc, ~/.profile (새 터미널부터 적용)"
 fi
 
 say "4/5 설정 파일"
