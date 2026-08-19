@@ -48,7 +48,19 @@ description: 안드로이드 폰에서 촬영한 사진을 구글드라이브로
 이걸 건너뛰면 사용자가 의도치 않은 폴더(스크린샷, 다운로드 이미지)까지 비워지는 걸
 나중에 발견하게 된다.
 
-## 설치 흐름
+## 설치 — 한 줄
+
+Termux가 이미 깔려 있으면 이 한 줄이면 끝난다. git도 클론도 필요 없다.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts/bootstrap.sh | bash
+```
+
+패키지 설치 → 스크립트 배치 → PATH·부팅 등록 → `setup`(폰 상태 읽어 자동 설정)까지
+이어서 돈다. 여러 번 실행해도 안전하다. 남는 건 구글 계정 로그인뿐인데, 그건
+`rclone config`로 사람이 해야 하고 `setup`이 그 단계만 따로 안내한다.
+
+## 설치 흐름 (수동으로 할 때)
 
 사용자에게 물어봐야 할 것부터 확인해라. 답이 없으면 괄호 안 기본값으로 간다.
 
@@ -150,7 +162,8 @@ DRY_RUN, 재검증, 복구, 실패 재시도 중단까지 17건을 확인한다.
 photo-drive-autobackup/
 ├── scripts/
 │   ├── photo-autobackup.sh      본체 (감시·업로드·검증·휴지통·복구·진단)
-│   ├── install.sh               Termux 설치 (멱등)
+│   ├── bootstrap.sh             한 줄 설치 (curl | bash)
+│   ├── install.sh               저장소를 클론했을 때 쓰는 설치 (멱등)
 │   └── config.example.env       설정 항목과 설명
 ├── references/
 │   ├── migration.md             폰 사진 전량 이관 런북 (migrate 쓸 때 반드시 읽어라)
