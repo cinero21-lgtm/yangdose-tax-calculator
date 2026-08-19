@@ -63,7 +63,7 @@ rclone config
 | `scope>` | `1` (Full access) 또는 `3` (drive.file — 이 앱이 만든 파일만) |
 | `service_account_file>` | 엔터 |
 | `Edit advanced config?` | `n` |
-| `Use auto config?` | **`n`** ← 폰에는 브라우저 자동 연동이 안 되므로 반드시 n |
+| `Use auto config?` | **`y`** ← 폰에서 인증할 때는 y (아래 설명) |
 | `Configure this as a Shared Drive?` | `n` |
 | `y/e/d>` | `y` (저장) |
 
@@ -71,7 +71,22 @@ rclone config
 사고로 다른 드라이브 파일을 건드릴 수 없다. 다만 나중에 웹에서 폴더를 옮기면
 rclone이 그 파일을 못 찾게 된다. 드라이브 전체를 rclone으로 관리할 생각이면 `1`.
 
-`Use auto config? n`을 고르면 이런 안내가 뜬다:
+### auto config 는 y 다 — 여기서 많이 틀린다
+
+일반적인 안내문에는 "헤드리스 서버에서는 n"이라고 적혀 있어서 폰에서도 n을 고르기 쉽다.
+하지만 폰은 **브라우저가 같은 기기 안에 있다.** 그래서 y가 맞다.
+
+`y`를 고르면 rclone이 로컬에 임시 서버를 띄우고 이런 주소를 찍어 준다:
+
+```
+If your browser doesn't open automatically go to the following link:
+    http://127.0.0.1:53682/auth?state=...
+```
+
+그 주소를 **길게 눌러 복사** → 폰 브라우저에 붙여넣기 → 구글 로그인 → 권한 허용.
+같은 기기이므로 127.0.0.1로 접속되고, 로그인이 끝나면 Termux 쪽이 토큰을 자동으로 받는다.
+
+`n`을 고르면 대신 이런 안내가 나온다:
 
 ```
 Execute the following on the machine with the web browser:
@@ -79,13 +94,8 @@ Execute the following on the machine with the web browser:
 Then paste the result below:
 ```
 
-**PC(윈도우/맥)에서** rclone을 받아 `rclone authorize "drive"`를 실행하면 브라우저가
-열리고, 구글 로그인 후 터미널에 긴 토큰 문자열이 찍힌다. 그걸 통째로 복사해서 폰
-Termux에 붙여넣으면 끝이다.
-
-PC가 없다면 폰에서 그대로 진행해도 된다. `rclone authorize "drive"`를 Termux에서 실행하면
-`http://127.0.0.1:53682/auth?...` 주소가 뜨는데, 그 주소를 폰 브라우저에 붙여넣어 로그인하면
-Termux 쪽에서 토큰을 받아 간다.
+이 경로는 **rclone이 깔린 PC가 따로 있을 때**만 쓴다. PC에서 `rclone authorize "drive"`를
+실행해 나온 긴 토큰 문자열을 폰 Termux에 붙여넣는 방식이다. 폰만 쓸 거라면 y로 가라.
 
 확인:
 
