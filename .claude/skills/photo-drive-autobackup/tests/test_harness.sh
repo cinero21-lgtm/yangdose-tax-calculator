@@ -279,6 +279,23 @@ check "이전본 백업 생성"        1 "$(ls "$ROOT/bin/pab-target.sh.bak" 2>/
 check "완료 메시지"             1 "$(echo "$out" | grep -c '업데이트 완료')"
 rm -f "$ROOT/bin/pab-target.sh"*
 
+echo "== 26. setup 이 사진·동영상 폴더를 모두 보여준다 =="
+out=$("$SKILL/scripts/photo-autobackup.sh" setup "테스트 사진" "테스트 동영상" 2>&1)
+check "사진 폴더 표시"        1 "$(echo "$out" | grep -c '사진 폴더     : 테스트 사진')"
+check "동영상 폴더 표시"      1 "$(echo "$out" | grep -c '동영상 폴더   : 테스트 동영상')"
+check "설정 파일에 기록"      1 "$(grep -c '^VIDEO_DRIVE_FOLDER="테스트 동영상"' "$HOME/.config/photo-autobackup/config.env")"
+
+echo "== 27. update 가 같은 버전일 때 그렇다고 말한다 =="
+cp "$SKILL/scripts/photo-autobackup.sh" "$ROOT/bin/pab-v.sh"
+out=$(UPDATE_URL="file://$SKILL/scripts/photo-autobackup.sh" PATH="$ROOT/bin:$PATH" \
+      bash "$ROOT/bin/pab-v.sh" update 2>&1)
+check "같은 버전이면 '이미 최신'" 1 "$(echo "$out" | grep -c '이미 최신')"
+sed 's|^VERSION=.*|VERSION="99.0.0"|' "$SKILL/scripts/photo-autobackup.sh" > "$ROOT/newer.sh"
+out=$(UPDATE_URL="file://$ROOT/newer.sh" PATH="$ROOT/bin:$PATH" \
+      bash "$ROOT/bin/pab-v.sh" update 2>&1)
+check "다른 버전이면 화살표 표기" 1 "$(echo "$out" | grep -c '\-> v99.0.0')"
+rm -f "$ROOT/bin/pab-v.sh"*
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

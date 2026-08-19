@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.3.0"
+VERSION="1.6.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -644,7 +644,8 @@ REQUIRE_WIFI=0
 DRY_RUN=0
 RCLONE_EXTRA_ARGS=""
 CFG
-  echo "  드라이브 폴더 : $folder"
+  echo "  사진 폴더     : $folder"
+  echo "  동영상 폴더   : $vfolder"
   echo "  감시 폴더     : $cam"
   echo "  이관 검사 범위: $roots"
   load_config
@@ -728,7 +729,11 @@ cmd_update() {
   local rb; rb="$(command -v bash)"
   [ -n "$rb" ] && sed -i "1s|^#!.*|#!$rb|" "$self"
 
-  echo "업데이트 완료: v$VERSION -> v$newver"
+  if [ "$newver" = "$VERSION" ]; then
+    echo "이미 최신이다 (v$VERSION). 파일은 새로 받아 두었다."
+  else
+    echo "업데이트 완료: v$VERSION -> v$newver"
+  fi
   echo "  이전본: $self.bak"
 }
 
