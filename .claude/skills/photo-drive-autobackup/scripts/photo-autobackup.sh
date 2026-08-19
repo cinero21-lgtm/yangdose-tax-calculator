@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.0.0"
+VERSION="2.0.1"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -454,12 +454,9 @@ exclude_call_paths() {
     done <<< "$cdirs"
     if [ "$in_call" = "0" ]; then printf '%s\n' "$line"; continue; fi
 
-    # 통화 폴더 안이다. 켜 두었다면 calls 가 맡으므로 전부 뺀다.
-    [ "$CALL_ENABLED" = "1" ] && continue
-
-    # 꺼져 있어도 '녹음·전사 파일'은 사진 정책(올리고 폰에서 치움)에 넘기면 안 된다.
-    # 통화녹취는 옵트인인데, 끈 상태에서 migrate 가 녹음을 지워 버리면 그 약속이
-    # 깨진다. 반대로 그 폴더의 진짜 사진까지 빼면 어디에도 백업되지 않는다.
+    # 통화 폴더 안이라도 '녹음·전사'만 뺀다. 전부 빼면 그 폴더의 사진은 calls 도
+    # 안 보고(확장자 밖) 사진 경로에서도 빠져, 어디에도 백업되지 않으면서
+    # verify-empty 는 "다 비었다"고 보고한다.
     lower=$(printf '%s' "${line##*.}" | tr 'A-Z' 'a-z')
     skip=0
     for e in $CALL_EXTENSIONS $TRANSCRIPT_EXTENSIONS; do
@@ -628,7 +625,7 @@ cmd_watch() {
       # 통화녹취를 켰다면 녹음 폴더도 함께 지켜본다 — 안 그러면 "통화가 끝나면
       # 바로 올라간다"가 실제로는 폴링 주기만큼 늦는다.
       local wdirs=()
-      while IFS= read -r _d; do [ -n "$_d" ] && wdirs+=("$_d"); done < <(printf '%s\n' $WATCH_DIRS)
+      while IFS= read -r _d; do [ -n "$_d" ] && wdirs+=("$_d"); done < <(split_dirs "$WATCH_DIRS")
       if [ "$CALL_ENABLED" = "1" ]; then
         while IFS= read -r _d; do [ -n "$_d" ] && wdirs+=("$_d"); done < <(discover_call_dirs)
       fi
@@ -643,19 +640,20 @@ cmd_watch() {
 
 # --------------------------------------------------------------------- 휴지통 정리
 cmd_purge() {
-  local quiet="${1:-}" n=0 f base ymd hms epoch cutoff
-  cutoff=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
+  local quiet="${1:-}" n=0 f base prefix cutoff
+  # 접두사는 자리수가 고정돼 있어 사전순 비교가 곧 시간순 비교다. 파일마다
+  # date 나 sed 를 띄우면 휴지통이 클수록 watch 가 잠들 틈이 없어진다.
+  cutoff=$(date -d "-${RETENTION_DAYS} days" '+%Y%m%d-%H%M%S' 2>/dev/null) || return 0
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    base=$(basename "$f")
-    # 휴지통 파일 이름은 우리가 붙인 'YYYYmmdd-HHMMSS-원래이름' 이다. 이 접두사가
-    # '버린 시각'이다. 파일 mtime 은 촬영 시각이라 보관 기간의 기준이 될 수 없다.
-    ymd=$(printf '%s' "$base" | sed -n 's/^\([0-9]\{8\}\)-[0-9]\{6\}-.*/\1/p')
-    hms=$(printf '%s' "$base" | sed -n 's/^[0-9]\{8\}-\([0-9]\{6\}\)-.*/\1/p')
-    # 접두사를 읽지 못하면 지우지 않는다. 모를 때는 보존이 안전하다.
-    [ -n "$ymd" ] && [ -n "$hms" ] || continue
-    epoch=$(date -d "${ymd:0:4}-${ymd:4:2}-${ymd:6:2} ${hms:0:2}:${hms:2:2}:${hms:4:2}" +%s 2>/dev/null) || continue
-    [ "$epoch" -le "$cutoff" ] || continue
+    base=${f##*/}
+    prefix=${base:0:15}
+    # 'YYYYmmdd-HHMMSS' 꼴이 아니면 우리가 넣은 파일이 아니다. 모르면 보존한다.
+    case "$prefix" in
+      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+      *) continue ;;
+    esac
+    [[ "$prefix" < "$cutoff" ]] || continue
     rm -f "$f" && n=$((n + 1))
   done < <(find "$TRASH_DIR" -type f ! -name 'manifest.tsv' 2>/dev/null)
   if [ "$n" -gt 0 ]; then
@@ -673,6 +671,14 @@ cmd_restore() {
     [ -f "$trash" ] || continue
     if [ "$pattern" = "all" ] || [[ "$trash" == *"$pattern"* ]]; then
       mkdir -p "$(dirname "$orig")"
+      # 그 자리에 다른 파일이 이미 있으면 덮어쓰지 않는다. 되돌리려다 사본이
+      # 없는 새 파일을 지우면 복구가 아니라 파괴다.
+      if [ -e "$orig" ]; then
+        local alt="${orig%.*}-복구본.${orig##*.}" k=1
+        while [ -e "$alt" ]; do alt="${orig%.*}-복구본-${k}.${orig##*.}"; k=$((k + 1)); done
+        log WARN "원래 자리에 다른 파일이 있어 옆에 복구한다: $alt"
+        orig="$alt"
+      fi
       if mv "$trash" "$orig" 2>/dev/null; then
         media_scan "$orig"
         log INFO "복구: $orig"
@@ -1318,7 +1324,7 @@ cmd_doctor() {
     else
       echo "  [실패] 폴더 없음: $d — termux-setup-storage 실행했는지 확인"; ok=0
     fi
-  done < <(printf '%s\n' $WATCH_DIRS)
+  done < <(split_dirs "$WATCH_DIRS")
 
   if [ "$perm_bad" = 1 ]; then
     if [ "$fix" = 1 ] && open_settings android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION; then

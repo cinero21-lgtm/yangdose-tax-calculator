@@ -18,9 +18,16 @@ case "$cmd" in
   lsd) exit 0 ;;
   hashsum)
     shift # MD5
+    # 통신 오류로 해시만 못 읽는 상황. 파일 존재 여부와는 다른 사건이다.
+    [ "${RCLONE_HASH_BLIND:-0}" = "1" ] && exit 1
     p="$REMOTE_ROOT/$(strip "$1")"
     [ -f "$p" ] || exit 1
     echo "$(md5sum "$p" | cut -d' ' -f1)  $(basename "$p")"
+    ;;
+  lsf)
+    p="$REMOTE_ROOT/$(strip "$1")"
+    [ -f "$p" ] || exit 1
+    basename "$p"
     ;;
   copyto)
     [ "${RCLONE_FAKE_FAIL:-0}" = "1" ] && exit 1
@@ -797,6 +804,74 @@ rm -f "$CALLDIR"/*
 
 echo "== 75. 갱신 주소가 브랜치 하나에 매여 있지 않다 =="
 check "main 주소 포함"            1 "$(grep -c 'UPDATE_BASE/main/\$UPDATE_PATH' "$SKILL/scripts/photo-autobackup.sh")"
+
+# ============ 6차 감수 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+
+echo "== 76. restore 가 원래 자리의 새 파일을 파괴하지 않는다 =="
+rm -f "$TRASH"/*.jpg
+mkdir -p "$SHARED/DCIM/R"
+echo "예전 사진" > "$SHARED/DCIM/R/겹침.jpg"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+# 이관 뒤 같은 자리에 새 사진이 생긴 상황
+echo "이관 뒤 찍은 새 사진" > "$SHARED/DCIM/R/겹침.jpg"
+"$SKILL/scripts/photo-autobackup.sh" restore 겹침.jpg >/dev/null 2>&1
+check "새 파일이 살아 있다"       "이관 뒤 찍은 새 사진" "$(cat "$SHARED/DCIM/R/겹침.jpg")"
+check "복구본은 옆에 생김"        1 "$(ls "$SHARED/DCIM/R/" | grep -c '복구본')"
+rm -rf "$SHARED/DCIM/R"
+
+echo "== 77. purge 가 파일마다 프로세스를 띄우지 않는다 =="
+rm -f "$TRASH"/*.jpg
+OLD=$(date -d '40 days ago' '+%Y%m%d-%H%M%S')
+NEW=$(date '+%Y%m%d-%H%M%S')
+for i in $(seq 1 300); do echo x > "$TRASH/${NEW}-최근_$i.jpg"; done
+for i in $(seq 1 50);  do echo y > "$TRASH/${OLD}-오래_$i.jpg"; done
+t0=$(date +%s%N)
+"$SKILL/scripts/photo-autobackup.sh" purge >/dev/null 2>&1
+t1=$(date +%s%N)
+elapsed_ms=$(( (t1 - t0) / 1000000 ))
+check "오래된 것만 삭제"          50 "$(( 50 - $(ls "$TRASH" | grep -c "^${OLD}-") ))"
+check "최근 것 300건 보존"        300 "$(ls "$TRASH" | grep -c "^${NEW}-최근")"
+check "350건 처리가 5초 미만"     1 "$([ "$elapsed_ms" -lt 5000 ] && echo 1 || echo 0)"
+rm -f "$TRASH"/*.jpg
+
+echo "== 78. 통화녹취를 켜도 그 폴더의 사진은 방치되지 않는다 =="
+echo "rec" > "$CALLDIR/수신 켜짐 260819.m4a"
+echo "pic" > "$CALLDIR/통화폴더사진.jpg"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "녹음은 폰에 남음(복사)"    1 "$(ls "$CALLDIR/수신 켜짐 260819.m4a" 2>/dev/null | wc -l)"
+check "사진은 이관됨"             0 "$(ls "$CALLDIR/통화폴더사진.jpg" 2>/dev/null | wc -l)"
+out=$("$SKILL/scripts/photo-autobackup.sh" verify-empty 2>&1)
+check "verify-empty 가 거짓말 안 함" 1 "$(echo "$out" | grep -c '남은 사진이 없다')"
+rm -f "$CALLDIR"/*
+
+echo "== 79. doctor 가 공백 든 감시폴더를 고장으로 오진하지 않는다 =="
+SP="$SHARED/DCIM/My Cam"
+mkdir -p "$SP"
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfgA.bak"
+printf 'WATCH_DIRS="%s"\n' "$SP" >> "$HOME/.config/photo-autobackup/config.env"
+out=$("$SKILL/scripts/photo-autobackup.sh" doctor 2>&1)
+check "폴더 없음 오진 안 함"      0 "$(echo "$out" | grep -c '폴더 없음')"
+check "쓰기 가능으로 인식"        1 "$(echo "$out" | grep -c '감시 폴더 쓰기 가능')"
+cp "$ROOT/cfgA.bak" "$HOME/.config/photo-autobackup/config.env"; rm -rf "$SP"
+
+echo "== 80. fail-closed 시험이 실제로 그 경로를 탄다 (가짜 통과 방지) =="
+# 스텁이 상황을 구현하는지부터 확인한다. 구현 안 하면 시험이 통과해도 의미가 없다.
+RCLONE_HASH_BLIND=1 rclone hashsum MD5 "gdrive:아무거나" >/dev/null 2>&1
+check "스텁이 해시 실패를 흉내냄" 1 "$?"
+rm -f "$CALLDIR"/*
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+mkdir -p "$ROOT/remote/수신녹취/$YM"
+echo "지키고 싶은 원본" > "$ROOT/remote/수신녹취/$YM/수신 보호 260819.m4a"
+echo "새 내용" > "$CALLDIR/수신 보호 260819.m4a"
+out=$(RCLONE_HASH_BLIND=1 "$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "원격 원본 보존"            "지키고 싶은 원본" "$(cat "$ROOT/remote/수신녹취/$YM/수신 보호 260819.m4a")"
+check "보류했다고 기록"           1 "$(echo "$out" | grep -c '덮어쓰지 않고 보류')"
+rm -f "$CALLDIR"/*
 
 echo
 echo "합계: PASS=$pass FAIL=$fail"
