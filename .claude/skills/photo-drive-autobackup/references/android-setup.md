@@ -63,6 +63,7 @@ rclone config
 | `scope>` | `1` (Full access) 또는 `3` (drive.file — 이 앱이 만든 파일만) |
 | `service_account_file>` | 엔터 |
 | `Edit advanced config?` | `n` |
+| `Continue using the shared client_id anyway?` | `y` (rclone 1.75+ 에서만 나온다. 아래 참고) |
 | `Use auto config?` | **`y`** ← 폰에서 인증할 때는 y (아래 설명) |
 | `Configure this as a Shared Drive?` | `n` |
 | `y/e/d>` | `y` (저장) |
@@ -103,6 +104,19 @@ Then paste the result below:
 rclone listremotes          # gdrive: 가 나와야 한다
 rclone lsd gdrive:          # 드라이브 최상위 폴더 목록이 나와야 한다
 ```
+
+### 공용 client_id 종료 예고
+
+rclone 1.75 부터 이런 경고가 나온다:
+
+```
+rclone's shared Google Drive client_id is being retired and will stop working during 2026.
+Continue using the shared client_id anyway? y/n>
+```
+
+지금은 `y` 로 넘어가면 그대로 동작한다. 다만 이름 그대로 언젠가 끊기므로, 그때는
+아래 '자체 client_id' 절차를 밟아야 한다. 끊겼을 때의 증상은 인증 실패이지
+사진 유실이 아니다 — 검증을 통과하지 못하면 원본을 지우지 않기 때문이다.
 
 ### 속도 주의 — 자체 client_id
 

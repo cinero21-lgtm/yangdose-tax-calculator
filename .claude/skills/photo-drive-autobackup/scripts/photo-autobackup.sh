@@ -628,6 +628,7 @@ CFG
       3                 (scope: drive.file — 이 앱이 만든 파일만 접근)
       (엔터)             (service account 없음)
       n                 (고급 설정 안 함)
+      y                 (공용 client_id 종료 예정 경고가 뜨면 y — 지금은 동작한다)
       y                 (auto config — 폰에서는 y 다. n 이 아니다)
       → rclone 이 http://127.0.0.1:53682/auth?state=... 주소를 찍어 준다.
          그 주소를 길게 눌러 복사해 폰 브라우저에 붙여넣고 구글 로그인.
