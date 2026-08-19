@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.2.0"
+VERSION="2.2.1"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -1340,13 +1340,23 @@ cmd_update() {
   newver=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
   [ -n "$newver" ] || { rm -f "$tmp"; die "버전을 못 읽었다. 덮어쓰지 않았다."; }
 
-  cp "$self" "$self.bak" 2>/dev/null
-  cat "$tmp" > "$self"
-  rm -f "$tmp"
-  chmod 755 "$self"
-  # 안드로이드에는 /usr/bin 이 없다. 실제 bash 경로로 다시 박는다.
+  # 준비를 임시 파일에서 끝내고 마지막에 이름만 바꿔 끼운다.
+  # 안드로이드에는 /usr/bin 이 없으므로 shebang 을 실제 bash 경로로 박는다.
   local rb; rb="$(command -v bash)"
-  [ -n "$rb" ] && sed -i "1s|^#!.*|#!$rb|" "$self"
+  [ -n "$rb" ] && sed -i "1s|^#!.*|#!$rb|" "$tmp"
+  chmod 755 "$tmp"
+
+  cp "$self" "$self.bak" 2>/dev/null
+
+  # 'cat > "$self"' 로 같은 파일에 덮어쓰면 안 된다. bash 는 스크립트를 한 번에
+  # 읽지 않고 실행하면서 이어 읽으므로, 내용이 그 자리에서 바뀌면 원래 바이트
+  # 위치부터 '새' 파일을 계속 읽는다. 그 지점이 함수 본문 한가운데면 조각들이
+  # 문맥 없이 실행되어 'unbound variable', 'command not found' 가 쏟아진다.
+  # 실기기에서 실제로 그랬다. mv 는 새 inode 를 붙이므로 실행 중인 프로세스는
+  # 열어 둔 옛 inode 를 끝까지 안전하게 읽는다.
+  if ! mv "$tmp" "$self"; then
+    rm -f "$tmp"; die "교체 실패. 이전본은 그대로다: $self.bak"
+  fi
 
   if [ "$newver" = "$VERSION" ]; then
     echo "이미 최신이다 (v$VERSION). 파일은 새로 받아 두었다."
@@ -1354,6 +1364,7 @@ cmd_update() {
     echo "업데이트 완료: v$VERSION -> v$newver"
   fi
   echo "  이전본: $self.bak"
+  echo "  ※ 이 실행은 이전 버전으로 끝난다. 다음 명령부터 새 버전이 적용된다."
 }
 
 # ------------------------------------------------------------------------ 진단

@@ -1004,6 +1004,31 @@ rm -rf "$SHARED/DCIM/Conc"
 echo "== 91. bootstrap 도 브랜치 하나에 매여 있지 않다 =="
 check "main 우선 시도"            1 "$(grep -c 'RAW_BASE/main/\$RAW_PATH' "$SKILL/scripts/bootstrap.sh")"
 
+echo "== 92. update 가 '실행 중인 자기 자신'을 안전하게 교체한다 =="
+# 기존 시험은 update 를 '다른 파일'에 대고 돌려서, 실행 중인 자기 자신이라는
+# 조건 자체를 만들지 않았다. 그래서 실기기에서 터진 이 결함을 못 잡았다.
+SELF="$ROOT/bin/pab-self.sh"
+cp "$SKILL/scripts/photo-autobackup.sh" "$SELF"
+# 갱신 '뒤에' 실행되어야 할 표지를 스크립트 맨 끝에 심는다
+printf '\necho "SENTINEL-끝까지-실행됨"\n' >> "$SELF"
+chmod 755 "$SELF"
+ino_before=$(stat -c %i "$SELF")
+
+# 새 버전은 길이를 크게 달리해, 바이트 위치가 어긋나면 반드시 티가 나게 한다
+sed 's|^VERSION=.*|VERSION="98.0.0"|' "$SKILL/scripts/photo-autobackup.sh" > "$ROOT/newer2.sh"
+for i in $(seq 1 60); do echo "# 길이를 늘려 오프셋을 어긋나게 한다 $i" >> "$ROOT/newer2.sh"; done
+
+out=$(UPDATE_URL="file://$ROOT/newer2.sh" PATH="$ROOT/bin:$PATH" bash "$SELF" update 2>&1)
+ino_after=$(stat -c %i "$SELF")
+
+check "갱신 뒤 남은 줄이 실행됨"   1 "$(echo "$out" | grep -c 'SENTINEL-끝까지-실행됨')"
+check "unbound variable 없음"      0 "$(echo "$out" | grep -c 'unbound variable')"
+check "command not found 없음"     0 "$(echo "$out" | grep -c 'command not found')"
+check "파일은 실제로 교체됨"       1 "$(grep -c '^VERSION="98.0.0"' "$SELF")"
+check "inode 가 바뀜(제자리 덮어쓰기 아님)" 1 "$([ "$ino_before" != "$ino_after" ] && echo 1 || echo 0)"
+check "이번 실행은 옛 버전임을 알림" 1 "$(echo "$out" | grep -c '다음 명령부터 새 버전')"
+rm -f "$SELF" "$SELF.bak" "$ROOT/newer2.sh"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
