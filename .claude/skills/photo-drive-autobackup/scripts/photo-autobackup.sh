@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -462,6 +462,70 @@ cmd_restore() {
   log INFO "복구 완료 — $restored건"
 }
 
+# --------------------------------------------------- 권한만 따로 보기 (짧게)
+# 권한 문제는 종류가 셋인데 증상이 비슷해서 헷갈린다. 하나씩 갈라서 보여 준다.
+cmd_perm() {
+  local shared="$HOME/storage/shared" ok=1
+
+  echo "── 권한 점검 ──────────────────────────────"
+
+  # 1) Termux 저장소 연결 (termux-setup-storage)
+  if [ -d "$shared" ]; then
+    echo "1. 저장소 연결      : OK"
+  else
+    echo "1. 저장소 연결      : 안 됨  ← 여기부터 해결"
+    echo "   지금 팝업을 띄운다. '허용'을 눌러라."
+    have termux-setup-storage && termux-setup-storage
+    sleep 3
+    [ -d "$shared" ] && echo "   → 연결됨" || {
+      echo "   → 아직 안 됨. 팝업을 거부했거나 안 떴다."
+      echo "     설정 > 애플리케이션 > Termux > 권한 > 파일 및 미디어 > 허용"
+      echo "     그다음 termux-setup-storage 를 다시 실행해라."
+    }
+    ok=0
+  fi
+
+  # 2) 읽기 — 사진이 보이는가
+  if [ -d "$shared" ]; then
+    local n
+    n=$(discover_all 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${n:-0}" -gt 0 ]; then
+      echo "2. 사진 읽기        : OK (${n}건 보임)"
+    else
+      echo "2. 사진 읽기        : 0건  ← 갤러리에 사진이 있다면 권한 문제다"
+      ok=0
+    fi
+  fi
+
+  # 3) 쓰기/삭제 — 실제로 파일을 만들어 지워 본다. 이게 진짜 판정이다.
+  if [ -d "$shared" ]; then
+    local probe="$shared/DCIM/.pab-permtest"
+    mkdir -p "$shared/DCIM" 2>/dev/null
+    if echo t > "$probe" 2>/dev/null && rm -f "$probe" 2>/dev/null; then
+      echo "3. 삭제 권한        : OK"
+    else
+      echo "3. 삭제 권한        : 없음  ← 업로드는 되는데 폰에서 안 지워지는 원인"
+      echo
+      echo "   안드로이드 11+ 는 '모든 파일 접근'을 따로 켜야 한다."
+      echo "   [삼성 One UI]"
+      echo "     설정 > 애플리케이션 > 우측상단 ⋮ > 특별한 접근 권한"
+      echo "       > 모든 파일에 접근할 수 있는 권한 > Termux 켜기"
+      if open_settings android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION; then
+        echo "   → 해당 설정 화면을 폰에 띄웠다. 켜고 돌아와서 다시 실행해라."
+      fi
+      ok=0
+    fi
+  fi
+
+  echo "───────────────────────────────────────────"
+  if [ "$ok" = "1" ]; then
+    echo "권한은 전부 정상이다. 다음: photo-autobackup.sh setup"
+  else
+    echo "위에서 '안 됨/없음'이 뜬 항목을 처리하고 이 명령을 다시 실행해라."
+  fi
+  return $((1 - ok))
+}
+
 # ------------------------------------------------------- 자동 설정 (한 방에)
 # 폰의 실제 상태를 읽어서 설정을 스스로 맞춘다. 사람이 값을 정해 넣지 않아도
 # 되도록 하는 게 목적이다 — 잘못된 경로 가정이 "안 된다"의 가장 흔한 원인이라서다.
@@ -682,6 +746,7 @@ usage() {
   cat <<'USAGE'
 사용법: photo-autobackup.sh <명령>
 
+  perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
   setup [폴더이름] 폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다.
                    처음 쓸 때와 "안 될 때" 제일 먼저 실행할 명령.
   migrate [--yes]  폰에 있는 사진을 전부 드라이브로 옮기고 폰에서 치운다(1회성).
@@ -702,6 +767,7 @@ USAGE
 main() {
   load_config
   case "${1:-}" in
+    perm)           cmd_perm ;;
     setup)          shift; cmd_setup "${1:-}" ;;
     migrate)        shift; cmd_migrate "$@" ;;
     verify-empty)   cmd_verify_empty ;;

@@ -183,6 +183,23 @@ echo "== 17. setup 직후 실제로 동작한다 (교정된 경로로 업로드)
 check "교정된 폴더에서 사진 처리됨"  0 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
 check "드라이브에 올라감"            1 "$(find "$ROOT/remote/내 폰 사진" -name 'G.jpg' 2>/dev/null | wc -l)"
 
+echo "== 18. perm: 권한 3종을 갈라서 판정한다 =="
+out=$("$SKILL/scripts/photo-autobackup.sh" perm 2>&1)
+check "저장소 연결 OK"      1 "$(echo "$out" | grep -c '1. 저장소 연결      : OK')"
+check "삭제 권한 실측 판정"  1 "$(echo "$out" | grep -c '3. 삭제 권한        : OK')"
+check "권한 테스트 파일 정리" 0 "$(find "$SHARED" -name '.pab-permtest' 2>/dev/null | wc -l)"
+
+echo "== 19. perm: 삭제 권한이 없으면 삼성 경로를 알려준다 =="
+# root 로 도는 테스트라 chmod 로는 쓰기를 막을 수 없다. DCIM 을 파일로 바꿔
+# "쓸 수 없는 경로"를 만든다 — 실기기의 EACCES 와 같은 분기를 탄다.
+mv "$SHARED/DCIM" "$SHARED/DCIM.bak"
+: > "$SHARED/DCIM"
+out=$("$SKILL/scripts/photo-autobackup.sh" perm 2>&1)
+check "삭제 권한 없음 판정"  1 "$(echo "$out" | grep -c '3. 삭제 권한        : 없음')"
+check "삼성 메뉴 경로 안내"  1 "$(echo "$out" | grep -c '특별한 접근 권한')"
+"$SKILL/scripts/photo-autobackup.sh" perm >/dev/null 2>&1; check "perm 종료코드 1" 1 "$?"
+rm -f "$SHARED/DCIM"; mv "$SHARED/DCIM.bak" "$SHARED/DCIM"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
