@@ -473,6 +473,73 @@ check "공백 경로에서 업로드"     1 "$(ls "$ROOT/remote/수신녹취/$YM
 cp "$ROOT/cfg.bak" "$HOME/.config/photo-autobackup/config.env"
 rm -rf "$SPACED"
 
+# ============ 2차 감수 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+
+echo "== 49. 배포용 설정 파일 자체를 검사한다 (하네스 설정이 가리지 못하게) =="
+CFG_SHIPPED="$SKILL/scripts/config.example.env"
+check "배포 설정에 '건' 없음"    0 "$(grep -c 'CALL_OUT_PATTERN=.*|건|' "$CFG_SHIPPED")"
+check "배포 설정 CALL_ENABLED=0" 1 "$(grep -c '^CALL_ENABLED=0' "$CFG_SHIPPED")"
+# 스크립트 기본값과 배포 설정의 패턴이 어긋나면 신규 설치만 다르게 동작한다
+p_script=$(grep -m1 '^CALL_OUT_PATTERN=' "$SKILL/scripts/photo-autobackup.sh")
+p_cfg=$(grep -m1 '^CALL_OUT_PATTERN=' "$CFG_SHIPPED")
+check "스크립트와 배포 설정 일치" "$p_script" "$p_cfg"
+
+echo "== 50. 녹음이 건너뛰어져도 전사는 독립적으로 올라간다 =="
+echo "audio" > "$CALLDIR/수신 독립 260819.m4a"
+echo "전사본문" > "$CALLDIR/수신 독립 260819.txt"
+# 녹음만 실패 횟수를 채워 영구 건너뛰기 상태로 만든다
+for i in 1 2 3 4 5; do
+  printf '%s\t%s\n' "$CALLDIR/수신 독립 260819.m4a" "$i" >> "$HOME/.local/share/photo-autobackup/failures.tsv"
+done
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "녹음은 건너뜀"            0 "$(ls "$ROOT/remote/수신녹취/$YM/수신 독립 260819.m4a" 2>/dev/null | wc -l)"
+check "전사는 그래도 올라감"     1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 독립 260819.txt" 2>/dev/null | wc -l)"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
+echo "== 51. 전사 실패도 실패 카운터에 잡힌다 =="
+rm -f "$CALLDIR"/*
+FAILTSV="$HOME/.local/share/photo-autobackup/failures.tsv"
+echo "audio" > "$CALLDIR/수신 전사실패 260819.m4a"
+echo "전사" > "$CALLDIR/수신 전사실패 260819.txt"
+RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "전사가 실패 장부에 기록"  1 "$(grep -c '수신 전사실패 260819.txt' "$FAILTSV")"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
+echo "== 52. 확장자 대소문자가 섞여도 짝을 찾는다 =="
+rm -f "$CALLDIR"/*
+echo "audio" > "$CALLDIR/수신 섞임 260819.M4a"
+echo "전사" > "$CALLDIR/수신 섞임 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check ".M4a 녹음 수신녹취로"     1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 섞임 260819.M4a" 2>/dev/null | wc -l)"
+check "전사도 같은 폴더로"       1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 섞임 260819.txt" 2>/dev/null | wc -l)"
+check "전사가 미분류로 안 감"    0 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/수신 섞임 260819.txt" 2>/dev/null | wc -l)"
+
+echo "== 53. 통화기록은 스윕당 한 번만 읽는다 =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/*
+: > "$ROOT/calllog-hits"
+cat > "$ROOT/bin/termux-call-log" <<'TCL'
+#!/usr/bin/env bash
+echo x >> "$CALLLOG_HITS"
+printf '[\n  {\n    "type": "INCOMING",\n    "date": "2020-01-01 00:00:00",\n    "duration": "00:00:10"\n  }\n]\n'
+TCL
+chmod +x "$ROOT/bin/termux-call-log"
+export CALLLOG_HITS="$ROOT/calllog-hits"
+for i in 1 2 3 4; do echo "m$i" > "$CALLDIR/무단서_$i.m4a"; done
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "4개 파일에 조회 1회"      1 "$(wc -l < "$ROOT/calllog-hits" | tr -d ' ')"
+rm -f "$ROOT/bin/termux-call-log"; unset CALLLOG_HITS
+
+echo "== 54. setup 재실행이 Wi-Fi 전용·대역폭 설정을 지우지 않는다 =="
+CFG="$HOME/.config/photo-autobackup/config.env"
+sed -i 's/^REQUIRE_WIFI=.*/REQUIRE_WIFI=0/' "$CFG" 2>/dev/null
+printf 'RCLONE_EXTRA_ARGS="--bwlimit 2M"\n' >> "$CFG"
+"$SKILL/scripts/photo-autobackup.sh" setup "Z폴드 8 사진" "Z폴드 8 동영상" >/dev/null 2>&1
+check "대역폭 제한 보존"         1 "$(grep -c 'bwlimit 2M' "$CFG")"
+sed -i '/bwlimit 2M/d' "$CFG"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

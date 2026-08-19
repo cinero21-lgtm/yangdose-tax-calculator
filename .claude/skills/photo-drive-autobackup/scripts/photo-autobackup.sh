@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.7.2"
+VERSION="1.8.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -526,7 +526,8 @@ cmd_watch() {
       if [ "$CALL_ENABLED" = "1" ]; then
         while IFS= read -r _d; do [ -n "$_d" ] && wdirs+=("$_d"); done < <(discover_call_dirs)
       fi
-      inotifywait -q -e close_write,moved_to -t "$POLL_SECONDS" "${wdirs[@]}" >/dev/null 2>&1
+      # -r 이 없으면 하위 폴더(Recordings/Call)에 생기는 파일을 놓친다.
+      inotifywait -q -r -e close_write,moved_to -t "$POLL_SECONDS" "${wdirs[@]}" >/dev/null 2>&1
       sleep "$MIN_AGE_SECONDS"
     else
       sleep "$POLL_SECONDS"
@@ -716,9 +717,9 @@ MIN_AGE_SECONDS=$MIN_AGE_SECONDS
 POLL_SECONDS=$POLL_SECONDS
 RETENTION_DAYS=$RETENTION_DAYS
 MAX_ATTEMPTS=$MAX_ATTEMPTS
-REQUIRE_WIFI=0
-DRY_RUN=0
-RCLONE_EXTRA_ARGS=""
+REQUIRE_WIFI=$REQUIRE_WIFI
+DRY_RUN=$DRY_RUN
+RCLONE_EXTRA_ARGS="$RCLONE_EXTRA_ARGS"
 CFG
   echo "  사진 폴더     : $folder"
   echo "  동영상 폴더   : $vfolder"
@@ -834,9 +835,19 @@ duration_seconds() {
   esac
 }
 
+# 스윕 한 번에 통화기록은 한 번만 읽는다.
+CALL_LOG_CACHE=""
+load_call_log() {
+  have termux-call-log || return 1
+  [ -n "$CALL_LOG_CACHE" ] && [ -f "$CALL_LOG_CACHE" ] && return 0
+  CALL_LOG_CACHE=$(mktemp)
+  termux-call-log -l 50 > "$CALL_LOG_CACHE" 2>/dev/null || { rm -f "$CALL_LOG_CACHE"; CALL_LOG_CACHE=""; return 1; }
+  return 0
+}
+
 direction_from_call_log() {
   local mtime="$1" line type date_s dur epoch endt diff best_diff="" best=""
-  have termux-call-log || return 1
+  load_call_log || return 1
   type=""; date_s=""; dur=""
   while IFS= read -r line; do
     case "$line" in
@@ -856,7 +867,7 @@ direction_from_call_log() {
         fi
         type=""; date_s=""; dur="" ;;
     esac
-  done < <(termux-call-log -l 50 2>/dev/null)
+  done < "$CALL_LOG_CACHE"
   [ -n "$best_diff" ] || return 1
   [ "$best_diff" -le "$CALL_LOG_WINDOW" ] || return 1
   case "$best" in
@@ -887,28 +898,25 @@ call_folder_for() {
 }
 
 # 녹음 파일과 같은 이름의 전사 파일을 찾는다. 없으면 빈 문자열.
-# 짝이 되는 전사 파일을 '전부' 돌려준다. .txt 와 .json 이 함께 나오는 앱이 있는데
-# 하나만 올리면 나머지는 영영 누락된다.
-transcripts_for() {
-  local audio="$1" stem ext cand found=1
-  stem="${audio%.*}"
-  for ext in $TRANSCRIPT_EXTENSIONS; do
-    for cand in "$stem.$ext" "$stem.${ext^^}"; do
-      [ -f "$cand" ] && { printf '%s\n' "$cand"; found=0; }
-    done
+# 같은 이름(확장자만 다른) 형제 파일 중 주어진 부류에 드는 것을 돌려준다.
+# 확장자 대소문자가 섞인 경우(.M4a)가 실제로 있으므로 소문자로 낮춰 비교한다.
+siblings_of_class() {
+  local f="$1" class="$2"
+  local stem cand lower e found=1
+  stem="${f%.*}"
+  for cand in "$stem".*; do
+    [ -f "$cand" ] || continue
+    [ "$cand" = "$f" ] && continue
+    lower=$(printf '%s' "${cand##*.}" | tr 'A-Z' 'a-z')
+    case "$class" in
+      audio)      for e in $CALL_EXTENSIONS;       do [ "$lower" = "$e" ] && { printf '%s\n' "$cand"; found=0; break; }; done ;;
+      transcript) for e in $TRANSCRIPT_EXTENSIONS; do [ "$lower" = "$e" ] && { printf '%s\n' "$cand"; found=0; break; }; done ;;
+    esac
   done
   return $found
 }
 
-# 이 녹음에 짝이 되는 오디오가 있는지 (대소문자 무관)
-has_paired_audio() {
-  local stem="${1%.*}" ext
-  for ext in $CALL_EXTENSIONS; do
-    [ -f "$stem.$ext" ] && return 0
-    [ -f "$stem.${ext^^}" ] && return 0
-  done
-  return 1
-}
+paired_audio_of() { siblings_of_class "$1" audio | head -n1; }
 
 is_transcript() {
   local lower ext
@@ -935,7 +943,7 @@ call_remote_dir() {
 }
 
 cmd_calls() {
-  local f dirq n_up=0 n_skip=0 n_fail=0 n_tr=0 seen_tr=0
+  local f rc n_up=0 n_skip=0 n_fail=0 n_tr=0 seen_tr=0
   if [ "$CALL_ENABLED" != "1" ]; then
     echo "통화녹취 기능이 꺼져 있다. 켜려면 설정 파일에 CALL_ENABLED=1 을 넣어라:"
     echo "  $CONFIG_FILE"
@@ -948,6 +956,13 @@ cmd_calls() {
   [ -n "$dirs" ] || { log WARN "녹음 폴더를 찾지 못했다. CALL_DIRS 를 직접 지정해라."; return 1; }
   log INFO "통화녹취 스윕 시작 — 대상 폴더: $dirs"
 
+  # 통화기록은 여기서 한 번만 읽는다. call_direction 은 $(...) 안에서 불리므로
+  # 그 안에서 캐시를 만들어 봤자 서브셸과 함께 사라지고, 파일 수만큼 조회하게 된다.
+  load_call_log || true
+
+  # 파일마다 독립적으로 처리한다. 전사를 녹음 처리 안에 끼워 넣으면, 녹음이
+  # 건너뛰어지거나 실패할 때 전사가 어느 경로로도 올라가지 못한 채 조용히 사라진다.
+  # 짝짓기는 "어느 폴더로 갈지"만 정하고, 업로드와 실패 집계는 모두가 같은 길을 탄다.
   while IFS= read -r f; do
     [ -f "$f" ] || continue
     is_stable "$f" || { n_skip=$((n_skip + 1)); continue; }
@@ -956,45 +971,36 @@ cmd_calls() {
     attempts=$(attempts_of "$f"); attempts=${attempts:-0}
     if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then n_skip=$((n_skip + 1)); continue; fi
 
-    local dir folder rdir tr rc
+    local anchor dir folder rdir conflict is_tr=0
     if is_transcript "$f"; then
-      seen_tr=$((seen_tr + 1))
-      # 짝이 되는 녹음이 있으면 그 녹음을 처리할 때 함께 올린다. 여기서는 건너뛴다.
-      has_paired_audio "$f" && continue
-      # 짝 없는 전사 — 미분류로 올린다. 버리면 안 되는 자료다.
-      rdir=$(call_remote_dir "$f" "$CALL_DRIVE_UNKNOWN")
-      copy_file "$f" "$rdir" overwrite; rc=$?
-      case $rc in
-        0) clear_failure "$f"; n_up=$((n_up + 1)); n_tr=$((n_tr + 1)) ;;
-        2) n_skip=$((n_skip + 1)) ;;
-        *) record_failure "$f"; n_fail=$((n_fail + 1)) ;;
-      esac
-      continue
+      is_tr=1; seen_tr=$((seen_tr + 1))
+      # 짝이 되는 녹음이 있으면 그 녹음과 같은 폴더로. 없으면 미분류로 보존한다.
+      anchor=$(paired_audio_of "$f")
+      [ -n "$anchor" ] || anchor="$f"
+      # 전사는 같은 항목의 갱신이므로 이름을 유지한 채 덮어쓴다. 해시 접미사가
+      # 붙으면 녹음과 이름이 어긋나 짝을 잃는다.
+      conflict="overwrite"
+    else
+      anchor="$f"; conflict="rename"
     fi
 
-    dir=$(call_direction "$f")
-    folder=$(call_folder_for "$dir")
-    rdir=$(call_remote_dir "$f" "$folder")
+    if [ "$anchor" = "$f" ] && [ "$is_tr" = "1" ]; then
+      folder="$CALL_DRIVE_UNKNOWN"
+    else
+      dir=$(call_direction "$anchor")
+      folder=$(call_folder_for "$dir")
+    fi
+    rdir=$(call_remote_dir "$anchor" "$folder")
 
-    copy_file "$f" "$rdir"; rc=$?
+    copy_file "$f" "$rdir" "$conflict"; rc=$?
     case $rc in
-      0) clear_failure "$f"; n_up=$((n_up + 1)) ;;
+      0) clear_failure "$f"; n_up=$((n_up + 1)); [ "$is_tr" = "1" ] && n_tr=$((n_tr + 1)) ;;
       2) n_skip=$((n_skip + 1)) ;;
-      *) record_failure "$f"; n_fail=$((n_fail + 1)); continue ;;
+      *) record_failure "$f"; n_fail=$((n_fail + 1)) ;;
     esac
-
-    # 전사 파일은 녹음과 같은 폴더로 함께 올린다. 짝이 떨어지면 나중에 못 찾는다.
-    while IFS= read -r tr; do
-      [ -n "$tr" ] || continue
-      seen_tr=$((seen_tr + 1))
-      copy_file "$tr" "$rdir" overwrite; rc=$?
-      case $rc in
-        0) n_up=$((n_up + 1)); n_tr=$((n_tr + 1)) ;;
-        2) : ;;
-        *) n_fail=$((n_fail + 1)) ;;
-      esac
-    done < <(transcripts_for "$f")
   done < <(find_call_files)
+
+  [ -n "$CALL_LOG_CACHE" ] && { rm -f "$CALL_LOG_CACHE"; CALL_LOG_CACHE=""; }
 
   log INFO "통화녹취 스윕 종료 — 업로드 $n_up건(전사 $n_tr), 건너뜀 $n_skip건, 실패 $n_fail건"
   if [ "$seen_tr" = "0" ]; then
