@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.9.0"
+VERSION="1.9.1"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -322,15 +322,33 @@ process_file() {
 # 올린 것을 장부에 적어 두고 내용이 그대로면 통신 없이 건너뛴다.
 copy_file() {
   local src="$1" rdir="$2" conflict="${3:-rename}"
-  local lmd5 seen seen_rel target_rel urc
+  local lmd5 seen seen_rel seen_size seen_mtime target_rel urc size mtime row
+
+  size=$(stat -c %s "$src" 2>/dev/null) || size=""
+  mtime=$(stat -c %Y "$src" 2>/dev/null) || mtime=""
+
+  row=$(awk -F'\t' -v k="$src" '$1==k' "$LEDGER" 2>/dev/null | tail -n1)
+  seen=$(printf '%s' "$row" | cut -f2)
+  seen_rel=$(printf '%s' "$row" | cut -f3)
+  seen_size=$(printf '%s' "$row" | cut -f5)
+  seen_mtime=$(printf '%s' "$row" | cut -f6)
+
+  # 크기와 수정시각이 그대로면 내용도 그대로다. 여기서 끊어야 보관함이 커져도
+  # 매 주기 비용이 늘지 않는다. 해시는 실제로 올릴 때만 계산한다.
+  if [ -n "$seen_size" ] && [ "$seen_size" = "$size" ] && [ "$seen_mtime" = "$mtime" ]; then
+    return 2
+  fi
 
   lmd5=$(md5_of "$src")
   [ -n "$lmd5" ] || { log WARN "해시 계산 실패, 건너뜀: $src"; return 1; }
 
-  seen=$(awk -F'\t' -v k="$src" '$1==k {print $2}' "$LEDGER" 2>/dev/null | tail -n1)
-  seen_rel=$(awk -F'\t' -v k="$src" '$1==k {print $3}' "$LEDGER" 2>/dev/null | tail -n1)
   if [ "$seen" = "$lmd5" ]; then
-    return 2   # 이미 올렸고 내용도 그대로 — 조용히 넘어간다
+    # 내용은 같은데 mtime 만 바뀐 경우 — 장부만 갱신하고 넘어간다
+    local t2="$LEDGER.tmp"
+    awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$t2" 2>/dev/null || : > "$t2"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$src" "$lmd5" "$seen_rel" "$(date '+%Y-%m-%d %H:%M:%S')" "$size" "$mtime" >> "$t2"
+    mv "$t2" "$LEDGER"
+    return 2
   fi
 
   # 장부를 먼저 본 뒤에야 안정성을 확인한다. 이미 올린 파일까지 1초씩 재우면
@@ -349,7 +367,8 @@ copy_file() {
 
   local tmp="$LEDGER.tmp"
   awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$tmp" 2>/dev/null || : > "$tmp"
-  printf '%s\t%s\t%s\t%s\n' "$src" "$lmd5" "$UPLOADED_REL" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$tmp"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$src" "$lmd5" "$UPLOADED_REL" "$(date '+%Y-%m-%d %H:%M:%S')" \
+    "$(stat -c %s "$src" 2>/dev/null)" "$(stat -c %Y "$src" 2>/dev/null)" >> "$tmp"
   mv "$tmp" "$LEDGER"
   log INFO "업로드+검증 완료, 폰에는 그대로 둔다: $(basename "$src")"
   return 0
@@ -389,6 +408,9 @@ discover_all() {
 # migrate 가 휴지통으로 옮겨 버리면 정책이 정면으로 뒤집힌다.
 exclude_call_paths() {
   local cdirs line d skip
+  # 통화녹취를 켜지 않았다면 제외하면 안 된다. 제외했는데 calls 도 안 돌면 그
+  # 폴더의 파일은 어느 쪽으로도 백업되지 않으면서 "폰이 비었다"고 보고된다.
+  [ "$CALL_ENABLED" = "1" ] || { cat; return; }
   cdirs=$(discover_call_dirs 2>/dev/null)
   if [ -z "$cdirs" ]; then cat; return; fi
   while IFS= read -r line; do
@@ -972,7 +994,9 @@ find_call_files() {
   [ ${#args[@]} -gt 0 ] && unset 'args[${#args[@]}-1]'
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    find "$d" -type f \( "${args[@]}" \) ! -name '.*' 2>/dev/null
+    # 한 겹만 본다. Recordings/Call 이 없는 기기에서는 Recordings 를 쓰게 되는데,
+    # 재귀로 훑으면 Recordings/Voice 의 음성메모까지 통화녹취로 올라간다.
+    find "$d" -maxdepth 1 -type f \( "${args[@]}" \) ! -name '.*' 2>/dev/null
   done < <(discover_call_dirs)
 }
 

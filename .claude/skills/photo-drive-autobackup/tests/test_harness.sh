@@ -641,6 +641,71 @@ check "조회가 상수(3회 이하)"    1 "$([ "$hits_12" -le 3 ] && echo 1 || 
 rm -f "$ROOT/bin/termux-call-log"; unset CALLLOG_HITS2
 rm -f "$CALLDIR"/*
 
+# ============ 4차 감수 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+
+echo "== 63. 배포 설정과 스크립트 기본값이 어긋나면 실패한다 (계열 전체) =="
+# 지금까지 세 번 연속으로 "스크립트만 고치고 배포 설정은 안 고침" 이 나왔다.
+# 키 하나씩 확인하지 말고, 두 파일에 다 있는 키는 전부 같은지 기계적으로 본다.
+SCRIPT="$SKILL/scripts/photo-autobackup.sh"
+CFG_SHIPPED="$SKILL/scripts/config.example.env"
+mismatch=0; mismatch_keys=""
+while IFS= read -r key; do
+  [ -n "$key" ] || continue
+  # 인라인 주석과 앞뒤 공백은 값이 아니다. 그것 때문에 어긋난 것처럼 보이면
+  # 진짜 어긋남을 알아보지 못하게 된다.
+  v_s=$(grep -m1 "^${key}=" "$SCRIPT"      | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | sed 's/[[:space:]]*$//')
+  v_c=$(grep -m1 "^${key}=" "$CFG_SHIPPED" | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | sed 's/[[:space:]]*$//')
+  [ -n "$v_c" ] || continue                 # 배포 설정에 없는 키는 대상 아님
+  if [ "$v_s" != "$v_c" ]; then
+    mismatch=$((mismatch + 1)); mismatch_keys="$mismatch_keys $key"
+  fi
+done < <(grep -oE '^(CALL|TRANSCRIPT)_[A-Z_]+' "$SCRIPT" | sort -u)
+[ "$mismatch" = "0" ] || echo "    어긋난 키:$mismatch_keys"
+check "CALL_/TRANSCRIPT_ 키 전부 일치" 0 "$mismatch"
+
+echo "== 64. Recordings/Call 이 없는 기기에서 음성메모를 빨아들이지 않는다 =="
+ALT="$SHARED/AltRec"
+mkdir -p "$ALT/Voice"
+echo "voice" > "$ALT/Voice/음성메모 001.m4a"
+echo "call"  > "$ALT/수신 최상위 260819.m4a"
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg5.bak"
+printf 'CALL_DIRS="%s"\n' "$ALT" >> "$HOME/.config/photo-autobackup/config.env"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "최상위 녹음은 올라감"      1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 최상위 260819.m4a" 2>/dev/null | wc -l)"
+check "하위 음성메모는 제외"      0 "$(find "$ROOT/remote" -name '음성메모 001.m4a' 2>/dev/null | wc -l)"
+cp "$ROOT/cfg5.bak" "$HOME/.config/photo-autobackup/config.env"; rm -rf "$ALT"
+
+echo "== 65. 통화녹취를 끈 상태에서 그 폴더의 사진이 방치되지 않는다 =="
+rm -f "$CALLDIR"/*
+echo "photo-in-recordings" > "$SHARED/Recordings/Call/사진하나.jpg"
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg6.bak"
+sed -i 's/^CALL_ENABLED=1/CALL_ENABLED=0/' "$HOME/.config/photo-autobackup/config.env"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "꺼져 있으면 사진 이관 대상" 0 "$(ls "$SHARED/Recordings/Call/사진하나.jpg" 2>/dev/null | wc -l)"
+cp "$ROOT/cfg6.bak" "$HOME/.config/photo-autobackup/config.env"
+
+echo "== 66. 재스윕이 보관함 전체를 다시 해싱하지 않는다 =="
+rm -f "$CALLDIR"/*
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+for i in 1 2 3; do echo "keep$i" > "$CALLDIR/수신 보관 $i 260819.m4a"; done
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+LED="$HOME/.local/share/photo-autobackup/uploaded.tsv"
+check "장부에 크기·수정시각 기록"  3 "$(awk -F'\t' 'NF>=6 && $5!="" && $6!="" && $1 ~ /수신 보관/' "$LED" | wc -l | tr -d ' ')"
+# md5sum 을 세는 껍데기를 끼워 재스윕이 해싱하지 않는지 본다
+: > "$ROOT/md5-hits"
+cat > "$ROOT/bin/md5sum" <<'MD5'
+#!/usr/bin/env bash
+echo x >> "$MD5_HITS"
+exec /usr/bin/md5sum "$@"
+MD5
+chmod +x "$ROOT/bin/md5sum"; export MD5_HITS="$ROOT/md5-hits"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "재스윕에서 해싱 0회"        0 "$(wc -l < "$ROOT/md5-hits" | tr -d ' ')"
+rm -f "$ROOT/bin/md5sum"; unset MD5_HITS
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
