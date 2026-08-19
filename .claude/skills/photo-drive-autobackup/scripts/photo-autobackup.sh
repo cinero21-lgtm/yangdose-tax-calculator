@@ -220,17 +220,20 @@ remote_md5() {
   rclone_run hashsum MD5 "$1" 2>/dev/null | awk 'NF {print $1; exit}'
 }
 
-# --------------------------------------------------------------- 파일 한 건 처리
-# 성공(휴지통으로 이동) 시 0, 그 외 1.
-process_file() {
-  local src="$1" mode="${2:-$LAYOUT}"
-  local base rdir rpath lmd5 rmd5 target
+# ------------------------------------------------------------- 업로드 + 검증
+# 사진은 올린 뒤 폰에서 치우고, 통화녹취는 올린 뒤 폰에 남긴다. 두 정책이 갈리는
+# 지점은 마지막 한 단계뿐이므로, 그 앞의 "올리고 해시로 확인한다"를 여기로 모은다.
+#
+# 성공 시 0 을 돌려주고 UPLOADED_REL 에 최종 원격 경로(폴더/파일명)를 담는다.
+UPLOADED_REL=""
+upload_and_verify() {
+  local src="$1" rdir="$2"
+  local base rpath lmd5 rmd5
+  UPLOADED_REL=""
 
   base=$(basename "$src")
   lmd5=$(md5_of "$src")
   [ -n "$lmd5" ] || { log WARN "해시 계산 실패, 건너뜀: $src"; return 1; }
-
-  rdir=$(remote_dir_for "$src" "$mode")
   rpath="$RCLONE_REMOTE:$rdir/$base"
 
   # 같은 이름이 이미 있으면: 내용이 같으면 업로드 생략, 다르면 이름을 구분해 준다.
@@ -238,18 +241,15 @@ process_file() {
   if [ -n "$rmd5" ] && [ "$rmd5" != "$lmd5" ]; then
     local stem ext
     stem="${base%.*}"; ext="${base##*.}"
-    if [ "$stem" = "$base" ]; then
-      base="${base}-${lmd5:0:8}"
-    else
-      base="${stem}-${lmd5:0:8}.${ext}"
-    fi
+    if [ "$stem" = "$base" ]; then base="${base}-${lmd5:0:8}"
+    else base="${stem}-${lmd5:0:8}.${ext}"; fi
     rpath="$RCLONE_REMOTE:$rdir/$base"
     rmd5=$(remote_md5 "$rpath")
     log INFO "원격에 동명이인 파일이 있어 이름을 바꿔 올린다: $base"
   fi
 
   if [ "$DRY_RUN" = "1" ]; then
-    log INFO "[DRY-RUN] 업로드 예정: $src -> $rdir/$base (휴지통 이동은 하지 않음)"
+    log INFO "[DRY-RUN] 업로드 예정: $src -> $rdir/$base"
     return 1
   fi
 
@@ -263,24 +263,65 @@ process_file() {
     rmd5=$(remote_md5 "$rpath")
   fi
 
-  # 여기가 안전장치의 핵심 — 해시가 비었거나 다르면 절대 로컬을 건드리지 않는다.
+  # 안전장치의 핵심 — 해시가 비었거나 다르면 로컬을 건드릴 자격이 없다.
   if [ -z "$rmd5" ]; then
-    log WARN "원격 해시를 읽지 못해 삭제를 보류한다: $base"
+    log WARN "원격 해시를 읽지 못했다: $base"
     return 1
   fi
   if [ "$rmd5" != "$lmd5" ]; then
-    log WARN "해시 불일치(local=$lmd5 remote=$rmd5), 삭제 보류: $base"
+    log WARN "해시 불일치(local=$lmd5 remote=$rmd5): $base"
     return 1
   fi
 
+  UPLOADED_REL="$rdir/$base"
+  UPLOADED_MD5="$lmd5"
+  return 0
+}
+
+# --------------------------------------------------------------- 파일 한 건 처리
+# 사진·동영상 정책: 올리고 검증한 뒤 폰에서 치운다(휴지통으로 이동).
+# 성공 시 0, 그 외 1.
+process_file() {
+  local src="$1" mode="${2:-$LAYOUT}"
+  local rdir target base
+
+  rdir=$(remote_dir_for "$src" "$mode")
+  upload_and_verify "$src" "$rdir" || return 1
+
+  base=$(basename "$UPLOADED_REL")
   target="$TRASH_DIR/$(date '+%Y%m%d-%H%M%S')-$base"
   if ! mv "$src" "$target" 2>/dev/null; then
     log WARN "휴지통 이동 실패(저장소 권한 확인 필요): $src"
     return 1
   fi
-  printf '%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$src" "$target" "$rdir/$base" "$lmd5" >> "$MANIFEST"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$src" "$target" "$UPLOADED_REL" "$UPLOADED_MD5" >> "$MANIFEST"
   media_scan "$src"
   log INFO "업로드+검증 완료, 휴지통으로 이동: $base"
+  return 0
+}
+
+# 통화녹취 정책: 올리고 검증한 뒤 폰에 그대로 둔다(복사).
+# 파일이 계속 남으므로, 매번 원격 해시를 물어보면 통화 수가 쌓일수록 느려진다.
+# 올린 것을 장부에 적어 두고 내용이 그대로면 통신 없이 건너뛴다.
+copy_file() {
+  local src="$1" rdir="$2"
+  local lmd5 seen
+
+  lmd5=$(md5_of "$src")
+  [ -n "$lmd5" ] || { log WARN "해시 계산 실패, 건너뜀: $src"; return 1; }
+
+  seen=$(awk -F'\t' -v k="$src" '$1==k {print $2}' "$LEDGER" 2>/dev/null | tail -n1)
+  if [ "$seen" = "$lmd5" ]; then
+    return 2   # 이미 올렸고 내용도 그대로 — 조용히 넘어간다
+  fi
+
+  upload_and_verify "$src" "$rdir" || return 1
+
+  local tmp="$LEDGER.tmp"
+  awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$tmp" 2>/dev/null || : > "$tmp"
+  printf '%s\t%s\t%s\t%s\n' "$src" "$lmd5" "$UPLOADED_REL" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$tmp"
+  mv "$tmp" "$LEDGER"
+  log INFO "업로드+검증 완료, 폰에는 그대로 둔다: $(basename "$src")"
   return 0
 }
 
