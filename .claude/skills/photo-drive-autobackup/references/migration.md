@@ -100,6 +100,19 @@ nohup photo-autobackup.sh migrate --yes > ~/migrate.out 2>&1 &
 tail -f ~/migrate.out
 ```
 
+### 3-1. 끝난 걸 어떻게 아나
+
+세 가지 중 아무거나 보면 된다.
+
+| 방법 | 완료 신호 |
+|---|---|
+| 화면 | `일괄 이관 종료 — 성공 N건, 실패 M건` 뒤 프롬프트(`~ $`) 복귀 |
+| `photo-autobackup.sh status` | `대기 중 : 0건` |
+| `pgrep -af photo-autobackup` | 아무것도 안 나옴 |
+
+termux-api 가 있으면 **끝날 때 폰 알림**이 뜬다. 몇 시간짜리 작업을 터미널만
+쳐다보며 기다릴 이유가 없다. 실패나 잔여가 있으면 알림 제목이 '확인 필요'로 바뀐다.
+
 ### 4. 결과 확인
 
 ```sh

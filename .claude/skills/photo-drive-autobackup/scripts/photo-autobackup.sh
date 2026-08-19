@@ -109,6 +109,16 @@ media_scan() {
 
 md5_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
+# 긴 작업이 끝났을 때 폰 알림을 띄운다. 몇 시간짜리 이관을 터미널만 쳐다보며
+# 기다리게 하지 않으려는 것이다. termux-api 가 없으면 조용히 넘어간다.
+notify() {
+  local title="$1" body="$2"
+  have termux-notification || return 0
+  termux-notification --id photo-autobackup --title "$title" --content "$body" \
+    --priority high >/dev/null 2>&1
+  return 0
+}
+
 # 권한 토글은 사람이 눌러야만 켜진다. 대신 어느 메뉴인지 찾아 헤매지 않도록
 # 해당 설정 화면을 폰에서 바로 띄워 준다.
 open_settings() {
@@ -409,6 +419,15 @@ cmd_migrate() {
   rm -f "$list"
 
   log INFO "일괄 이관 종료 — 성공 $n_ok건, 실패 $n_fail건"
+
+  local left
+  left=$(discover_all | wc -l | tr -d ' ')
+  if [ "$n_fail" = "0" ] && [ "$left" = "0" ]; then
+    notify "이관 완료" "${n_ok}건을 옮기고 폰을 비웠다. 휴지통을 비워야 실제 공간이 생긴다."
+  else
+    notify "이관 종료 (확인 필요)" "성공 ${n_ok}건, 실패 ${n_fail}건, 폰에 ${left}건 남음"
+  fi
+
   echo
   cmd_verify_empty
 }

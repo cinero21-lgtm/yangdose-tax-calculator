@@ -236,6 +236,28 @@ check "동영상 폰에 그대로"        1 "$(ls "$SHARED/DCIM/Camera" | wc -l)
 sed -i '/^VIDEO_EXTENSIONS=""$/d' "$HOME/.config/photo-autobackup/config.env"
 rm -f "$SHARED/DCIM/Camera"/*
 
+echo "== 23. 이관이 끝나면 알림을 띄운다 =="
+cat > "$ROOT/bin/termux-notification" <<'TN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$RCLONE_FAKE_ROOT/../notify.log"
+TN
+chmod +x "$ROOT/bin/termux-notification"
+: > "$ROOT/notify.log"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "done-a" > "$SHARED/DCIM/Camera/N1.jpg"
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "완료 알림 발송"        1 "$(grep -c '이관 완료' "$ROOT/notify.log")"
+check "건수 포함"             1 "$(grep -c '1건을 옮기고' "$ROOT/notify.log")"
+
+echo "== 24. 남은 게 있으면 '확인 필요' 알림 =="
+: > "$ROOT/notify.log"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "will-fail" > "$SHARED/DCIM/Camera/N2.jpg"
+RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "확인 필요 알림"        1 "$(grep -c '확인 필요' "$ROOT/notify.log")"
+check "남은 건수 포함"        1 "$(grep -c '1건 남음' "$ROOT/notify.log")"
+rm -f "$SHARED/DCIM/Camera"/* "$ROOT/bin/termux-notification"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
