@@ -1,11 +1,25 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Termux에서 한 줄로 설치한다. git도, 저장소 클론도 필요 없다.
 #
-#   curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts/bootstrap.sh -o ~/pab.sh && bash ~/pab.sh
 #
+# 파이프(| bash)로 실행해도 되지만, 그 경우 아래 가드가 파일로 다시 받아 실행한다.
 # 여러 번 실행해도 안전하다.
 
 set -uo pipefail
+
+# curl | bash 로 실행되면 stdin 이 곧 스크립트 본문이다. 중간에 stdin 을 읽는
+# 명령(apt/pkg 등)이 하나라도 있으면 남은 본문을 삼켜서, 에러 없이 조용히
+# 중간에 끝난다. 실기기에서 실제로 1/4 뒤 종료됐다.
+# 파이프로 들어온 경우 자기 자신을 파일로 내려받아 다시 실행해 그 경로를 없앤다.
+if [ ! -t 0 ] && [ -z "${PAB_RELAUNCHED:-}" ]; then
+  _self="$HOME/.photo-autobackup-bootstrap.sh"
+  if command -v curl >/dev/null 2>&1 && curl -fsSL \
+      "https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts/bootstrap.sh" \
+      -o "$_self" 2>/dev/null; then
+    PAB_RELAUNCHED=1 exec bash "$_self"
+  fi
+fi
 
 RAW="https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts"
 BIN_DIR="$HOME/bin"
@@ -20,7 +34,7 @@ fi
 # 진행 상황을 그대로 보여 준다. 감추면 몇 분간 빈 화면이라 멈춘 걸로 오해한다.
 # 파이프를 쓰면 종료코드가 뒤쪽 명령 것이 되어 pkg 실패를 놓치므로 직접 실행한다.
 echo "  rclone 등 약 50MB를 내려받는다. 2~5분 걸릴 수 있다."
-if ! pkg install -y curl rclone termux-api inotify-tools coreutils findutils; then
+if ! pkg install -y curl rclone termux-api inotify-tools coreutils findutils < /dev/null; then
   die "패키지 설치 실패. 플레이스토어판 Termux라면 지워야 한다 — F-Droid 버전을 설치해라:
      https://f-droid.org/packages/com.termux/
      저장소 문제라면 'termux-change-repo' 로 미러를 바꾼 뒤 다시 실행해라."
