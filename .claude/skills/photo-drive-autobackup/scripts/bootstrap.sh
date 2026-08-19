@@ -17,10 +17,13 @@ say "1/4 필요한 패키지 설치"
 if ! command -v pkg >/dev/null 2>&1; then
   die "Termux가 아니다. Termux 앱 안에서 실행해라."
 fi
-# 플레이스토어판 Termux는 저장소가 끊겨 여기서 막힌다. 그 경우 바로 알려 준다.
-if ! pkg install -y curl rclone termux-api inotify-tools coreutils findutils 2>&1 | tail -3; then
+# 진행 상황을 그대로 보여 준다. 감추면 몇 분간 빈 화면이라 멈춘 걸로 오해한다.
+# 파이프를 쓰면 종료코드가 뒤쪽 명령 것이 되어 pkg 실패를 놓치므로 직접 실행한다.
+echo "  rclone 등 약 50MB를 내려받는다. 2~5분 걸릴 수 있다."
+if ! pkg install -y curl rclone termux-api inotify-tools coreutils findutils; then
   die "패키지 설치 실패. 플레이스토어판 Termux라면 지워야 한다 — F-Droid 버전을 설치해라:
-     https://f-droid.org/packages/com.termux/"
+     https://f-droid.org/packages/com.termux/
+     저장소 문제라면 'termux-change-repo' 로 미러를 바꾼 뒤 다시 실행해라."
 fi
 
 say "2/4 스크립트 내려받기"
