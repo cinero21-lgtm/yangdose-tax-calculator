@@ -58,5 +58,6 @@ cat <<'NEXT'
   1) 구글드라이브 연결:  rclone config     (references/android-setup.md 4단계 참고)
   2) 상태 점검:          ~/bin/photo-autobackup.sh doctor
   3) 안전 예행연습:      config.env 에 DRY_RUN=1 넣고  ~/bin/photo-autobackup.sh once
-  4) 실제 가동:          DRY_RUN=0 으로 되돌리고  ~/bin/photo-autobackup.sh watch
+  4) 폰 사진 전량 이관:  ~/bin/photo-autobackup.sh migrate      (계획 확인 후 yes)
+  5) 이후 자동 감시:     ~/bin/photo-autobackup.sh watch
 NEXT

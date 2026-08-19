@@ -4,7 +4,7 @@ set -uo pipefail
 SKILL="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT=$(mktemp -d)
 export HOME="$ROOT/home"
-mkdir -p "$HOME/storage/dcim/Camera" "$ROOT/bin" "$ROOT/remote"
+mkdir -p "$HOME/storage/dcim/Camera" "$HOME/storage/shared" "$ROOT/bin" "$ROOT/remote"
 
 # ---- rclone 스텁: $ROOT/remote 를 구글드라이브라고 친다
 cat > "$ROOT/bin/rclone" <<'RC'
@@ -109,6 +109,53 @@ check "6회차에는 보류로 건너뜀"         1 "$(echo "$out" | grep -c '�
 echo "== 9. doctor / status 실행 가능 =="
 "$SKILL/scripts/photo-autobackup.sh" doctor >/dev/null 2>&1; check "doctor 종료코드 0" 0 "$?"
 "$SKILL/scripts/photo-autobackup.sh" status >/dev/null 2>&1; check "status 종료코드 0" 0 "$?"
+
+echo "== 10. 일괄 이관(migrate): 폰 전체 사진을 폴더 구조 그대로 옮긴다 =="
+SHARED="$HOME/storage/shared"
+mkdir -p "$SHARED/DCIM/Camera" "$SHARED/Pictures/Screenshots" "$SHARED/Pictures/카카오톡 받은 사진" \
+         "$SHARED/Android/data/com.foo/files" "$SHARED/DCIM/.thumbnails"
+rm -f "$CAM"/*
+echo "cam-a"    > "$SHARED/DCIM/Camera/A.jpg"
+echo "shot-b"   > "$SHARED/Pictures/Screenshots/B.png"
+echo "kakao-c"  > "$SHARED/Pictures/카카오톡 받은 사진/C.jpg"
+echo "appcache" > "$SHARED/Android/data/com.foo/files/D.jpg"
+echo "thumb"    > "$SHARED/DCIM/.thumbnails/E.jpg"
+cat >> "$HOME/.config/photo-autobackup/config.env" <<CFG
+DRIVE_FOLDER="Z폴드 8 사진"
+MIGRATE_ROOTS="$SHARED"
+CFG
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+R="$ROOT/remote/Z폴드 8 사진"
+check "카메라 사진 이동됨"          0 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
+check "스크린샷 이동됨"             0 "$(ls "$SHARED/Pictures/Screenshots" | wc -l)"
+check "공백 포함 폴더도 이동됨"     0 "$(ls "$SHARED/Pictures/카카오톡 받은 사진" | wc -l)"
+check "드라이브 폴더 구조 재현(DCIM/Camera)"      1 "$(ls "$R/DCIM/Camera/A.jpg" 2>/dev/null | wc -l)"
+check "드라이브 폴더 구조 재현(Screenshots)"      1 "$(ls "$R/Pictures/Screenshots/B.png" 2>/dev/null | wc -l)"
+check "공백 포함 경로 업로드"                     1 "$(ls "$R/Pictures/카카오톡 받은 사진/C.jpg" 2>/dev/null | wc -l)"
+
+echo "== 11. 앱 캐시·썸네일은 건드리지 않는다 =="
+check "Android/data 안 사진 보존"   1 "$(ls "$SHARED/Android/data/com.foo/files" | wc -l)"
+check "썸네일 폴더 보존"            1 "$(ls "$SHARED/DCIM/.thumbnails" | wc -l)"
+check "캐시가 드라이브에 안 올라감" 0 "$(find "$ROOT/remote" -name 'D.jpg' -o -name 'E.jpg' | wc -l)"
+
+echo "== 12. verify-empty: 다 옮겼으면 0건 =="
+out=$("$SKILL/scripts/photo-autobackup.sh" verify-empty 2>&1)
+check "남은 사진 없음 보고"         1 "$(echo "$out" | grep -c '남은 사진이 없다')"
+"$SKILL/scripts/photo-autobackup.sh" verify-empty >/dev/null 2>&1; check "verify-empty 종료코드 0" 0 "$?"
+
+echo "== 13. 업로드 실패분은 폰에 남고 verify-empty가 잡아낸다 =="
+echo "will-fail" > "$SHARED/DCIM/Camera/F.jpg"
+RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+out=$("$SKILL/scripts/photo-autobackup.sh" verify-empty 2>&1)
+check "원본 폰에 남음"              1 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
+check "남은 건수 보고"              1 "$(echo "$out" | grep -c '아직 1건')"
+"$SKILL/scripts/photo-autobackup.sh" verify-empty >/dev/null 2>&1; check "verify-empty 종료코드 1" 1 "$?"
+
+echo "== 14. migrate 는 확인 없이 지우지 않는다 (yes 미입력 시 중단) =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "no" | "$SKILL/scripts/photo-autobackup.sh" migrate >/dev/null 2>&1
+check "거부하면 원본 그대로"        1 "$(ls "$SHARED/DCIM/Camera" | wc -l)"
 
 echo
 echo "합계: PASS=$pass FAIL=$fail"
