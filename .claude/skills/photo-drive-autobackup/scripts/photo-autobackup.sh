@@ -693,6 +693,45 @@ GUIDE
   return 1
 }
 
+# ------------------------------------------------------------------- 자체 업데이트
+# 폰에서 긴 URL 을 붙여넣는 건 고역이다. 스크립트가 스스로 최신본을 받아오게 한다.
+UPDATE_URL="${UPDATE_URL:-https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts/photo-autobackup.sh}"
+
+cmd_update() {
+  local self tmp newver
+  # PATH 에 있는 것이 아니라 "지금 실행 중인 이 파일"을 갱신해야 한다.
+  # 여러 벌이 깔려 있을 때 엉뚱한 것을 고치면 갱신했는데 그대로인 상황이 된다.
+  self="$0"
+  [ -f "$self" ] || self="$(command -v photo-autobackup.sh 2>/dev/null)"
+  [ -n "$self" ] || die "갱신할 파일을 찾지 못했다."
+  # 심볼릭 링크면 실체를 고쳐야 한다. 링크를 덮어쓰면 링크가 끊긴다.
+  self="$(readlink -f "$self" 2>/dev/null || printf '%s' "$self")"
+  [ -w "$self" ] || die "쓸 수 없다: $self"
+
+  tmp="$(mktemp)"
+  echo "내려받는 중..."
+  if ! curl -fsSL "$UPDATE_URL" -o "$tmp"; then
+    rm -f "$tmp"; die "내려받기 실패. 인터넷 연결을 확인해라."
+  fi
+  # 받다 만 파일로 덮어쓰면 도구 자체가 죽는다. 실행 가능한지 먼저 본다.
+  if ! bash -n "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; die "받은 파일이 온전하지 않다. 덮어쓰지 않았다."
+  fi
+  newver=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
+  [ -n "$newver" ] || { rm -f "$tmp"; die "버전을 못 읽었다. 덮어쓰지 않았다."; }
+
+  cp "$self" "$self.bak" 2>/dev/null
+  cat "$tmp" > "$self"
+  rm -f "$tmp"
+  chmod 755 "$self"
+  # 안드로이드에는 /usr/bin 이 없다. 실제 bash 경로로 다시 박는다.
+  local rb; rb="$(command -v bash)"
+  [ -n "$rb" ] && sed -i "1s|^#!.*|#!$rb|" "$self"
+
+  echo "업데이트 완료: v$VERSION -> v$newver"
+  echo "  이전본: $self.bak"
+}
+
 # ------------------------------------------------------------------------ 진단
 cmd_doctor() {
   local ok=1 d fix=0
@@ -800,6 +839,7 @@ usage() {
   cat <<'USAGE'
 사용법: photo-autobackup.sh <명령>
 
+  update           스크립트를 최신본으로 갱신 (긴 URL 붙여넣기 불필요)
   perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
   setup [사진폴더] [동영상폴더]
                    폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다.
@@ -822,6 +862,7 @@ USAGE
 main() {
   load_config
   case "${1:-}" in
+    update)         cmd_update ;;
     perm)           cmd_perm ;;
     setup)          shift; cmd_setup "${1:-}" "${2:-}" ;;
     migrate)        shift; cmd_migrate "$@" ;;

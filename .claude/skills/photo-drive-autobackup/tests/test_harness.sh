@@ -258,6 +258,27 @@ check "확인 필요 알림"        1 "$(grep -c '확인 필요' "$ROOT/notify.l
 check "남은 건수 포함"        1 "$(grep -c '1건 남음' "$ROOT/notify.log")"
 rm -f "$SHARED/DCIM/Camera"/* "$ROOT/bin/termux-notification"
 
+echo "== 25. update: 온전한 파일만 덮어쓴다 =="
+cp "$SKILL/scripts/photo-autobackup.sh" "$ROOT/bin/pab-target.sh"
+before=$(md5sum "$ROOT/bin/pab-target.sh" | cut -d' ' -f1)
+
+# (a) 깨진 파일을 받으면 덮어쓰지 않아야 한다
+printf 'VERSION="9.9.9"\nif [ then oops\n' > "$ROOT/broken.sh"
+out=$(UPDATE_URL="file://$ROOT/broken.sh" PATH="$ROOT/bin:$PATH" \
+      bash "$ROOT/bin/pab-target.sh" update 2>&1)
+after=$(md5sum "$ROOT/bin/pab-target.sh" | cut -d' ' -f1)
+check "깨진 파일은 거부"       "$before" "$after"
+check "거부 사유 안내"          1 "$(echo "$out" | grep -c '온전하지 않다')"
+
+# (b) 정상 파일이면 갱신되고 백업이 남는다
+sed 's|^VERSION=.*|VERSION="9.9.9"|' "$SKILL/scripts/photo-autobackup.sh" > "$ROOT/good.sh"
+out=$(UPDATE_URL="file://$ROOT/good.sh" PATH="$ROOT/bin:$PATH" \
+      bash "$ROOT/bin/pab-target.sh" update 2>&1)
+check "정상 파일은 갱신"        1 "$(grep -c '^VERSION="9.9.9"' "$ROOT/bin/pab-target.sh")"
+check "이전본 백업 생성"        1 "$(ls "$ROOT/bin/pab-target.sh.bak" 2>/dev/null | wc -l)"
+check "완료 메시지"             1 "$(echo "$out" | grep -c '업데이트 완료')"
+rm -f "$ROOT/bin/pab-target.sh"*
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

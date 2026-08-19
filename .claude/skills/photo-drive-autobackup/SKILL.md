@@ -90,6 +90,7 @@ curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculat
 
 | 명령 | 하는 일 |
 |---|---|
+| `update` | 스크립트를 최신본으로 갱신. 폰에서 긴 URL을 붙여넣지 않아도 된다 |
 | `perm` | 권한만 짧게 점검하고 필요한 설정 화면을 폰에 띄운다 |
 | `setup [사진폴더] [동영상폴더]` | 폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다 |
 | `migrate [--yes]` | 폰에 있는 사진을 **전부** 옮기고 폰을 비운다(1회성). 계획을 먼저 보여주고 `yes`를 받아야 진행 |
