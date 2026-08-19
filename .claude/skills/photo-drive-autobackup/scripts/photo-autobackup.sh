@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.8.0"
+VERSION="1.9.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -47,7 +47,7 @@ REQUIRE_WIFI=0
 # 켜기 전에 클라우드로 올라가면 사고다.
 CALL_ENABLED=0
 CALL_DIRS=""                       # 비면 자동 탐색
-CALL_EXTENSIONS="m4a mp3 amr wav aac 3gpp"
+CALL_EXTENSIONS="m4a mp3 amr wav aac 3gp 3gpp"
 TRANSCRIPT_EXTENSIONS="txt md json srt vtt"
 CALL_DRIVE_IN="수신녹취"
 CALL_DRIVE_OUT="발신통화녹취"
@@ -266,7 +266,7 @@ upload_and_verify() {
 
   if [ "$DRY_RUN" = "1" ]; then
     log INFO "[DRY-RUN] 업로드 예정: $src -> $rdir/$base"
-    return 1
+    return 3      # 실패가 아니라 '건너뜀'
   fi
 
   if [ "$rmd5" = "$lmd5" ]; then
@@ -302,7 +302,8 @@ process_file() {
   local rdir target base
 
   rdir=$(remote_dir_for "$src" "$mode")
-  upload_and_verify "$src" "$rdir" || return 1
+  upload_and_verify "$src" "$rdir"; local urc=$?
+  [ "$urc" = "0" ] || return $urc
 
   base=$(basename "$UPLOADED_REL")
   target="$TRASH_DIR/$(date '+%Y%m%d-%H%M%S')-$base"
@@ -321,17 +322,30 @@ process_file() {
 # 올린 것을 장부에 적어 두고 내용이 그대로면 통신 없이 건너뛴다.
 copy_file() {
   local src="$1" rdir="$2" conflict="${3:-rename}"
-  local lmd5 seen
+  local lmd5 seen seen_rel target_rel urc
 
   lmd5=$(md5_of "$src")
   [ -n "$lmd5" ] || { log WARN "해시 계산 실패, 건너뜀: $src"; return 1; }
 
   seen=$(awk -F'\t' -v k="$src" '$1==k {print $2}' "$LEDGER" 2>/dev/null | tail -n1)
+  seen_rel=$(awk -F'\t' -v k="$src" '$1==k {print $3}' "$LEDGER" 2>/dev/null | tail -n1)
   if [ "$seen" = "$lmd5" ]; then
     return 2   # 이미 올렸고 내용도 그대로 — 조용히 넘어간다
   fi
 
-  upload_and_verify "$src" "$rdir" "$conflict" || return 1
+  # 장부를 먼저 본 뒤에야 안정성을 확인한다. 이미 올린 파일까지 1초씩 재우면
+  # 통화가 쌓일수록 매 주기가 느려져 장부를 둔 의미가 사라진다.
+  is_stable "$src" || return 3
+
+  # 덮어쓰기는 '내가 전에 바로 그 자리에 올린 것'을 갱신할 때만 허용한다.
+  # 그 외에는 남의 파일일 수 있으므로 이름을 달리해 올린다.
+  target_rel="$rdir/$(basename "$src")"
+  if [ "$conflict" = "update" ]; then
+    if [ "$seen_rel" = "$target_rel" ]; then conflict="overwrite"; else conflict="rename"; fi
+  fi
+
+  upload_and_verify "$src" "$rdir" "$conflict"; urc=$?
+  [ "$urc" = "0" ] || return $urc
 
   local tmp="$LEDGER.tmp"
   awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$tmp" 2>/dev/null || : > "$tmp"
@@ -350,7 +364,7 @@ collect_candidates() {
     [ -n "$d" ] || continue
     d=$(resolve_dir "$d"); [ -d "$d" ] || continue
     find "$d" -type f \( "${args[@]}" \) ! -name '.*' ! -name '*.pending' ! -name '*.trashed*' 2>/dev/null
-  done < <(printf '%s\n' $WATCH_DIRS)
+  done < <(printf '%s\n' $WATCH_DIRS) | exclude_call_paths
 }
 
 # 폰 전체에서 '진짜 사진'만 골라낸다. 앱 캐시·썸네일·다운로드 임시파일은 건너뛴다 —
@@ -368,6 +382,22 @@ discover_all() {
       ! -name '.*' ! -name '*.pending' ! -name '*.trashed*' \
       ! -path "$TRASH_DIR/*" ! -path "$STATE_DIR/*" \
       -print 2>/dev/null
+  done | exclude_call_paths
+}
+
+# 통화 녹음 폴더는 사진·동영상 훑기에서 뺀다. 녹취는 "폰에 남긴다"가 정책인데
+# migrate 가 휴지통으로 옮겨 버리면 정책이 정면으로 뒤집힌다.
+exclude_call_paths() {
+  local cdirs line d skip
+  cdirs=$(discover_call_dirs 2>/dev/null)
+  if [ -z "$cdirs" ]; then cat; return; fi
+  while IFS= read -r line; do
+    skip=0
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      case "$line" in "$d"/*) skip=1; break ;; esac
+    done <<< "$cdirs"
+    [ "$skip" = "0" ] && printf '%s\n' "$line"
   done
 }
 
@@ -382,11 +412,12 @@ cmd_once() {
       n_skip=$((n_skip + 1)); continue
     fi
     is_stable "$f" || { n_skip=$((n_skip + 1)); continue; }
-    if process_file "$f"; then
-      clear_failure "$f"; n_ok=$((n_ok + 1))
-    else
-      record_failure "$f"; n_fail=$((n_fail + 1))
-    fi
+    process_file "$f"; local prc=$?
+    case $prc in
+      0) clear_failure "$f"; n_ok=$((n_ok + 1)) ;;
+      3) n_skip=$((n_skip + 1)) ;;   # DRY_RUN — 실패가 아니다
+      *) record_failure "$f"; n_fail=$((n_fail + 1)) ;;
+    esac
   done < <(collect_candidates)
   log INFO "훑기 완료 — 처리 $n_ok건, 보류 $n_skip건, 실패 $n_fail건"
   cmd_purge quiet
@@ -463,11 +494,12 @@ cmd_migrate() {
   while IFS= read -r f; do
     i=$((i + 1))
     [ -f "$f" ] || continue
-    if process_file "$f" "$MIGRATE_LAYOUT"; then
-      clear_failure "$f"; n_ok=$((n_ok + 1))
-    else
-      record_failure "$f"; n_fail=$((n_fail + 1))
-    fi
+    process_file "$f" "$MIGRATE_LAYOUT"; local prc=$?
+    case $prc in
+      0) clear_failure "$f"; n_ok=$((n_ok + 1)) ;;
+      3) : ;;
+      *) record_failure "$f"; n_fail=$((n_fail + 1)) ;;
+    esac
     if [ $((i % 25)) = 0 ]; then
       log INFO "진행 $i/$count (성공 $n_ok, 실패 $n_fail)"
     fi
@@ -802,14 +834,14 @@ discover_call_dirs() {
       [ -d "$d" ] && picked+=("$d")
     done
   fi
-  # Recordings/Call 과 Recordings 를 둘 다 내보내면 같은 파일을 두 번 훑는다.
-  # 해시 계산과 안정성 대기(1초)와 통화기록 조회가 전부 두 배가 된다.
+  # 겹치면 '더 구체적인 쪽'을 남긴다. Recordings 를 통째로 훑으면 Recordings/Voice
+  # 의 음성메모까지 통화녹취로 올라간다. 통화 녹음은 Recordings/Call 에 있다.
   for d in "${picked[@]:-}"; do
     [ -n "$d" ] || continue
     dup=0
     for p in "${picked[@]:-}"; do
       [ "$p" = "$d" ] && continue
-      case "$d" in "$p"/*) dup=1; break ;; esac
+      case "$p" in "$d"/*) dup=1; break ;; esac   # 내 하위가 목록에 있으면 나는 뺀다
     done
     [ "$dup" = "0" ] && printf '%s\n' "$d"
   done
@@ -835,15 +867,23 @@ duration_seconds() {
   esac
 }
 
-# 스윕 한 번에 통화기록은 한 번만 읽는다.
-CALL_LOG_CACHE=""
+# 통화기록은 스윕 한 번에 한 번만 읽는다. call_direction 은 $(...) 안에서 불리므로
+# 캐시를 변수에 담으면 서브셸과 함께 사라지고 파일 수만큼 Termux:API 를 두드린다.
+# 고정 경로 파일에 담고 신선도로 판정하면 어느 셸에서 만들었든 공유된다.
+CALL_LOG_TTL=120
 load_call_log() {
   have termux-call-log || return 1
-  [ -n "$CALL_LOG_CACHE" ] && [ -f "$CALL_LOG_CACHE" ] && return 0
-  CALL_LOG_CACHE=$(mktemp)
-  termux-call-log -l 50 > "$CALL_LOG_CACHE" 2>/dev/null || { rm -f "$CALL_LOG_CACHE"; CALL_LOG_CACHE=""; return 1; }
+  CALL_LOG_CACHE="$STATE_DIR/.call-log.json"
+  if [ -f "$CALL_LOG_CACHE" ]; then
+    local age
+    age=$(( $(date +%s) - $(stat -c %Y "$CALL_LOG_CACHE" 2>/dev/null || echo 0) ))
+    [ "$age" -le "$CALL_LOG_TTL" ] && [ -s "$CALL_LOG_CACHE" ] && return 0
+  fi
+  termux-call-log -l 50 > "$CALL_LOG_CACHE.tmp" 2>/dev/null || { rm -f "$CALL_LOG_CACHE.tmp"; return 1; }
+  mv "$CALL_LOG_CACHE.tmp" "$CALL_LOG_CACHE"
   return 0
 }
+drop_call_log() { rm -f "$STATE_DIR/.call-log.json" 2>/dev/null; CALL_LOG_CACHE=""; }
 
 direction_from_call_log() {
   local mtime="$1" line type date_s dur epoch endt diff best_diff="" best=""
@@ -882,8 +922,9 @@ direction_from_call_log() {
 call_direction() {
   local f="$1" base mtime dir
   base=$(basename "$f")
-  if printf '%s' "$base" | grep -qiE "$CALL_IN_PATTERN";  then printf 'in';  return; fi
-  if printf '%s' "$base" | grep -qiE "$CALL_OUT_PATTERN"; then printf 'out'; return; fi
+  # 빈 패턴은 무엇에나 일치한다. 비워 둔 것은 '이 방법을 쓰지 않겠다'는 뜻이다.
+  if [ -n "$CALL_IN_PATTERN" ]  && printf '%s' "$base" | grep -qiE "$CALL_IN_PATTERN";  then printf 'in';  return; fi
+  if [ -n "$CALL_OUT_PATTERN" ] && printf '%s' "$base" | grep -qiE "$CALL_OUT_PATTERN"; then printf 'out'; return; fi
   mtime=$(stat -c %Y "$f" 2>/dev/null) || { printf 'unknown'; return; }
   if dir=$(direction_from_call_log "$mtime"); then printf '%s' "$dir"; return; fi
   printf 'unknown'
@@ -965,7 +1006,6 @@ cmd_calls() {
   # 짝짓기는 "어느 폴더로 갈지"만 정하고, 업로드와 실패 집계는 모두가 같은 길을 탄다.
   while IFS= read -r f; do
     [ -f "$f" ] || continue
-    is_stable "$f" || { n_skip=$((n_skip + 1)); continue; }
 
     local attempts
     attempts=$(attempts_of "$f"); attempts=${attempts:-0}
@@ -979,7 +1019,7 @@ cmd_calls() {
       [ -n "$anchor" ] || anchor="$f"
       # 전사는 같은 항목의 갱신이므로 이름을 유지한 채 덮어쓴다. 해시 접미사가
       # 붙으면 녹음과 이름이 어긋나 짝을 잃는다.
-      conflict="overwrite"
+      conflict="update"
     else
       anchor="$f"; conflict="rename"
     fi
@@ -995,12 +1035,12 @@ cmd_calls() {
     copy_file "$f" "$rdir" "$conflict"; rc=$?
     case $rc in
       0) clear_failure "$f"; n_up=$((n_up + 1)); [ "$is_tr" = "1" ] && n_tr=$((n_tr + 1)) ;;
-      2) n_skip=$((n_skip + 1)) ;;
+      2|3) n_skip=$((n_skip + 1)) ;;   # 3 = DRY_RUN 이거나 아직 기록 중 — 실패가 아니다
       *) record_failure "$f"; n_fail=$((n_fail + 1)) ;;
     esac
   done < <(find_call_files)
 
-  [ -n "$CALL_LOG_CACHE" ] && { rm -f "$CALL_LOG_CACHE"; CALL_LOG_CACHE=""; }
+  drop_call_log
 
   log INFO "통화녹취 스윕 종료 — 업로드 $n_up건(전사 $n_tr), 건너뜀 $n_skip건, 실패 $n_fail건"
   if [ "$seen_tr" = "0" ]; then
@@ -1017,18 +1057,22 @@ cmd_probe() {
   echo "========== 통화녹취 환경 조사 (v$VERSION) =========="
   echo
 
-  echo "[1] 녹음 폴더 후보"
+  echo "[1] 실제로 쓰이는 녹음 폴더"
+  if [ -n "$CALL_DIRS" ]; then echo "  (CALL_DIRS 로 직접 지정됨)"; fi
   local found=0
-  for d in "$shared/Recordings/Call" "$shared/Recordings" "$shared/Call" "$shared/Sounds"; do
-    if [ -d "$d" ]; then
-      n=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
-      printf '  [있음] %-45s 파일 %s건\n' "${d#$shared/}" "$n"
-      found=1
-    else
-      printf '  [없음] %s\n' "${d#$shared/}"
-    fi
-  done
-  [ "$found" = "1" ] || echo "  → 후보가 하나도 없다. 통화 녹음 설정이 꺼져 있을 수 있다."
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    n=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
+    printf '  [사용] %-45s 파일 %s건\n' "${d#$shared/}" "$n"
+    found=1
+  done < <(discover_call_dirs)
+  if [ "$found" = "0" ]; then
+    echo "  → 없다. 통화 녹음 설정이 꺼져 있거나 경로가 다르다."
+    echo "     자동 탐색 후보:"
+    for d in "$shared/Recordings/Call" "$shared/Recordings" "$shared/Call" "$shared/Sounds"; do
+      printf '       %s %s\n' "$([ -d "$d" ] && echo '[있음]' || echo '[없음]')" "${d#$shared/}"
+    done
+  fi
   echo
 
   echo "[2] 확장자별 분포 (녹음 폴더 안)"
@@ -1038,6 +1082,10 @@ cmd_probe() {
       | awk '{printf "  %6d건  .%s\n", $1, $2}'
   done < <(discover_call_dirs)
   echo
+
+  # call_direction 은 $(...) 안에서 불리므로 여기서 미리 캐시해 두지 않으면
+  # 샘플 파일 수만큼 termux-call-log 를 부르고 임시파일도 그만큼 남긴다.
+  load_call_log || true
 
   echo "[3] 파일 이름 샘플 (최근 5건) — 수신/발신이 이름에 적히는지 본다"
   cnt=0
@@ -1084,6 +1132,8 @@ cmd_probe() {
   echo "  미분류 → $RCLONE_REMOTE:$CALL_DRIVE_UNKNOWN/"
   echo "  정책: 업로드 후에도 폰에 그대로 둔다(복사)"
   echo "=================================================="
+  drop_call_log
+  return 0
 }
 
 # ------------------------------------------------------------------- 자체 업데이트

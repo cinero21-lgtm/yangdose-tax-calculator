@@ -383,7 +383,7 @@ snap_remote=$(find "$ROOT/remote" -type f | sort | md5sum)
 out=$("$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
 check "폰 파일 변화 없음"        "$snap_local" "$(find "$CALLDIR" -type f | sort | md5sum)"
 check "드라이브 변화 없음"       "$snap_remote" "$(find "$ROOT/remote" -type f | sort | md5sum)"
-check "녹음 폴더 보고"           1 "$(echo "$out" | grep -c '녹음 폴더 후보')"
+check "녹음 폴더 보고"           1 "$(echo "$out" | grep -qc '녹음 폴더' && echo 1 || echo 0)"
 check "전사 파일 절 출력"        1 "$(echo "$out" | grep -c '전사(텍스트) 파일')"
 
 # ============ 감수 지적사항 재발 방지 ============
@@ -539,6 +539,107 @@ printf 'RCLONE_EXTRA_ARGS="--bwlimit 2M"\n' >> "$CFG"
 "$SKILL/scripts/photo-autobackup.sh" setup "Z폴드 8 사진" "Z폴드 8 동영상" >/dev/null 2>&1
 check "대역폭 제한 보존"         1 "$(grep -c 'bwlimit 2M' "$CFG")"
 sed -i '/bwlimit 2M/d' "$CFG"
+
+# ============ 3차 감수 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+
+echo "== 55. 음성메모 폴더를 통화녹취로 빨아들이지 않는다 =="
+mkdir -p "$SHARED/Recordings/Voice"
+echo "voice-memo" > "$SHARED/Recordings/Voice/음성 001.m4a"
+echo "call" > "$CALLDIR/수신 정상 260819.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "통화 녹음은 올라감"       1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 정상 260819.m4a" 2>/dev/null | wc -l)"
+check "음성메모는 안 올라감"     0 "$(find "$ROOT/remote/통화녹취_미분류" -name '음성 001.m4a' 2>/dev/null | wc -l)"
+check "음성메모 폰에 그대로"     1 "$(ls "$SHARED/Recordings/Voice/음성 001.m4a" 2>/dev/null | wc -l)"
+
+echo "== 56. 통화 녹음이 사진 이관에 휩쓸리지 않는다 =="
+echo "call-3gp" > "$CALLDIR/수신 3gp테스트 260819.3gp"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check ".3gp 녹음 폰에 남음"      1 "$(ls "$CALLDIR/수신 3gp테스트 260819.3gp" 2>/dev/null | wc -l)"
+check "동영상 폴더로 안 감"      0 "$(find "$ROOT/remote/Z폴드 8 동영상" -name '*3gp테스트*' 2>/dev/null | wc -l)"
+check "휴지통에 없음"            0 "$(find "$HOME/.local/share/photo-autobackup/trash" -name '*3gp테스트*' 2>/dev/null | wc -l)"
+
+echo "== 57. 빈 패턴은 '전부 일치'가 아니라 '판정 안 함'이다 =="
+rm -f "$CALLDIR"/*
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg2.bak"
+printf 'CALL_IN_PATTERN=""\nCALL_OUT_PATTERN=""\n' >> "$HOME/.config/photo-autobackup/config.env"
+echo "x" > "$CALLDIR/발신 명백한 260819.m4a"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "수신으로 오분류 안 됨"    0 "$(ls "$ROOT/remote/수신녹취/$YM/발신 명백한 260819.m4a" 2>/dev/null | wc -l)"
+check "미분류로 감"              1 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/발신 명백한 260819.m4a" 2>/dev/null | wc -l)"
+cp "$ROOT/cfg2.bak" "$HOME/.config/photo-autobackup/config.env"
+
+echo "== 58. 남의 동명 파일을 덮어쓰지 않는다 =="
+rm -f "$CALLDIR"/*
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+mkdir -p "$ROOT/remote/수신녹취/$YM"
+echo "남이 올린 전사" > "$ROOT/remote/수신녹취/$YM/수신 충돌 260819.txt"
+echo "audio" > "$CALLDIR/수신 충돌 260819.m4a"
+echo "내 전사" > "$CALLDIR/수신 충돌 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "기존 파일 보존"           "남이 올린 전사" "$(cat "$ROOT/remote/수신녹취/$YM/수신 충돌 260819.txt")"
+check "내 것은 이름 바꿔 올림"   1 "$(ls "$ROOT/remote/수신녹취/$YM/" | grep -c '수신 충돌 260819-')"
+
+echo "== 59. 내가 올린 전사의 갱신은 이름을 유지한 채 덮어쓴다 =="
+rm -f "$CALLDIR"/* ; rm -rf "$ROOT/remote/수신녹취"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "audio" > "$CALLDIR/수신 갱신 260819.m4a"
+echo "1판" > "$CALLDIR/수신 갱신 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+echo "2판" > "$CALLDIR/수신 갱신 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "이름 그대로"              1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 갱신 260819.txt" 2>/dev/null | wc -l)"
+check "해시 접미사 없음"         0 "$(ls "$ROOT/remote/수신녹취/$YM/" | grep -c '수신 갱신 260819-')"
+check "내용 갱신됨"              "2판" "$(cat "$ROOT/remote/수신녹취/$YM/수신 갱신 260819.txt")"
+
+echo "== 60. DRY_RUN 예행연습이 파일을 영구 차단하지 않는다 =="
+rm -f "$CALLDIR"/*
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "dry" > "$CALLDIR/수신 예행 260819.m4a"
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg3.bak"
+echo 'DRY_RUN=1' >> "$HOME/.config/photo-autobackup/config.env"
+for i in 1 2 3 4 5 6; do "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1; done
+check "실패 장부 비어 있음"      0 "$(grep -c '수신 예행' "$HOME/.local/share/photo-autobackup/failures.tsv")"
+cp "$ROOT/cfg3.bak" "$HOME/.config/photo-autobackup/config.env"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "예행연습 뒤 정상 업로드"  1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 예행 260819.m4a" 2>/dev/null | wc -l)"
+
+echo "== 61. probe 가 CALL_DIRS 지정을 반영한다 =="
+SPACED2="$SHARED/내 녹음"
+mkdir -p "$SPACED2"; echo "x" > "$SPACED2/수신 지정 260819.m4a"
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg4.bak"
+printf 'CALL_DIRS="%s"\n' "$SPACED2" >> "$HOME/.config/photo-autobackup/config.env"
+out=$("$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "지정 폴더를 사용으로 보고" 1 "$(echo "$out" | grep -c '내 녹음')"
+check "'없다' 라고 하지 않음"     0 "$(echo "$out" | grep -c '통화 녹음 설정이 꺼져')"
+cp "$ROOT/cfg4.bak" "$HOME/.config/photo-autobackup/config.env"; rm -rf "$SPACED2"
+
+echo "== 62. probe 가 통화기록을 파일마다 부르지 않는다 =="
+: > "$ROOT/calllog-hits2"
+cat > "$ROOT/bin/termux-call-log" <<'TCL'
+#!/usr/bin/env bash
+echo x >> "$CALLLOG_HITS2"
+printf '[\n  {\n    "type": "INCOMING",\n    "date": "2020-01-01 00:00:00",\n    "duration": "00:00:10"\n  }\n]\n'
+TCL
+chmod +x "$ROOT/bin/termux-call-log"
+export CALLLOG_HITS2="$ROOT/calllog-hits2"
+# 상수 몇 회(캐시 적재 + 가용성 확인)는 정상이다. 확인할 성질은 "파일 수에
+# 비례하지 않는가" 다 — 비례하면 첫 스윕에서 수백 번 왕복하게 된다.
+rm -f "$CALLDIR"/*
+for i in 1 2 3; do echo "p$i" > "$CALLDIR/probe단서없음_$i.m4a"; done
+"$SKILL/scripts/photo-autobackup.sh" probe >/dev/null 2>&1
+hits_3=$(wc -l < "$ROOT/calllog-hits2" | tr -d ' ')
+: > "$ROOT/calllog-hits2"
+for i in 4 5 6 7 8 9 10 11 12; do echo "p$i" > "$CALLDIR/probe단서없음_$i.m4a"; done
+"$SKILL/scripts/photo-autobackup.sh" probe >/dev/null 2>&1
+hits_12=$(wc -l < "$ROOT/calllog-hits2" | tr -d ' ')
+check "파일이 4배여도 조회 동일" "$hits_3" "$hits_12"
+check "조회가 상수(3회 이하)"    1 "$([ "$hits_12" -le 3 ] && echo 1 || echo 0)"
+rm -f "$ROOT/bin/termux-call-log"; unset CALLLOG_HITS2
+rm -f "$CALLDIR"/*
 
 echo
 echo "합계: PASS=$pass FAIL=$fail"
