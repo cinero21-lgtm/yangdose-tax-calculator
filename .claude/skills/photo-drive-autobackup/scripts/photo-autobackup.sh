@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.9.1"
+VERSION="2.0.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -86,6 +86,21 @@ die() { log ERROR "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 resolve_dir() { readlink -f "$1" 2>/dev/null || printf '%s' "$1"; }
+
+# 폴더 목록을 한 줄에 하나씩 내보낸다. 줄바꿈을 우선하고, 그 줄이 통째로는
+# 폴더가 아닐 때만 공백으로 쪼갠다. 공백으로 먼저 쪼개면 'DCIM/My Photos' 같은
+# 경로가 두 조각으로 갈라져 0건만 처리하며 조용히 아무 일도 하지 않는다.
+split_dirs() {
+  local line w
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ -d "$(resolve_dir "$line")" ]; then
+      printf '%s\n' "$line"
+    else
+      for w in $line; do [ -n "$w" ] && printf '%s\n' "$w"; done
+    fi
+  done <<< "$1"
+}
 
 all_extensions() { printf '%s %s' "$EXTENSIONS" "$VIDEO_EXTENSIONS"; }
 
@@ -211,7 +226,8 @@ remote_dir_for() {
   local f="$1" mode="${2:-$LAYOUT}" ymd root real rel base
   base=$(base_folder_for "$f")
   if [ "$mode" = "mirror" ]; then
-    for root in $MIGRATE_ROOTS; do
+    while IFS= read -r root; do
+      [ -n "$root" ] || continue
       real=$(resolve_dir "$root")
       case "$f" in
         "$real"/*)
@@ -220,7 +236,7 @@ remote_dir_for() {
           else printf '%s/%s' "$base" "$rel"; fi
           return ;;
       esac
-    done
+    done < <(split_dirs "$MIGRATE_ROOTS")
   fi
   ymd=$(date -d "@$(stat -c %Y "$f")" '+%Y/%Y-%m' 2>/dev/null) || ymd=$(date '+%Y/%Y-%m')
   printf '%s/%s' "$base" "$ymd"
@@ -254,6 +270,14 @@ upload_and_verify() {
 
   # 같은 이름이 이미 있으면: 내용이 같으면 업로드 생략, 다르면 이름을 구분해 준다.
   rmd5=$(remote_md5 "$rpath")
+  if [ -z "$rmd5" ]; then
+    # 해시가 비었다 = '없다' 이거나 '못 읽었다'. 존재 여부를 따로 확인해서
+    # 통신 오류를 '없음'으로 오해하지 않는다.
+    if rclone_run lsf "$rpath" 2>/dev/null | grep -q .; then
+      log WARN "원격에 파일은 있는데 해시를 못 읽었다. 덮어쓰지 않고 보류한다: $base"
+      return 1
+    fi
+  fi
   if [ -n "$rmd5" ] && [ "$rmd5" != "$lmd5" ] && [ "$conflict" = "rename" ]; then
     local stem ext
     stem="${base%.*}"; ext="${base##*.}"
@@ -307,6 +331,12 @@ process_file() {
 
   base=$(basename "$UPLOADED_REL")
   target="$TRASH_DIR/$(date '+%Y%m%d-%H%M%S')-$base"
+  # 같은 초에 같은 이름이 겹치면 앞엣것을 덮어써 한 장이 조용히 사라진다.
+  if [ -e "$target" ]; then
+    local nth=1
+    while [ -e "$TRASH_DIR/$(date '+%Y%m%d-%H%M%S')-${nth}-$base" ]; do nth=$((nth + 1)); done
+    target="$TRASH_DIR/$(date '+%Y%m%d-%H%M%S')-${nth}-$base"
+  fi
   if ! mv "$src" "$target" 2>/dev/null; then
     log WARN "휴지통 이동 실패(저장소 권한 확인 필요): $src"
     return 1
@@ -335,15 +365,21 @@ copy_file() {
 
   # 크기와 수정시각이 그대로면 내용도 그대로다. 여기서 끊어야 보관함이 커져도
   # 매 주기 비용이 늘지 않는다. 해시는 실제로 올릴 때만 계산한다.
-  if [ -n "$seen_size" ] && [ "$seen_size" = "$size" ] && [ "$seen_mtime" = "$mtime" ]; then
+  target_rel="$rdir/$(basename "$src")"
+  if [ -n "$seen_size" ] && [ "$seen_size" = "$size" ] && [ "$seen_mtime" = "$mtime" ] \
+     && [ "$seen_rel" = "$target_rel" ]; then
     return 2
   fi
+  # 목적지가 달라졌다면(예: 미분류로 갔던 전사에 짝 녹음이 생겨 제자리를 찾음)
+  # 내용이 같아도 다시 올려야 한다. 목적지를 안 보면 영영 미분류에 남는다.
 
   lmd5=$(md5_of "$src")
   [ -n "$lmd5" ] || { log WARN "해시 계산 실패, 건너뜀: $src"; return 1; }
 
-  if [ "$seen" = "$lmd5" ]; then
-    # 내용은 같은데 mtime 만 바뀐 경우 — 장부만 갱신하고 넘어간다
+  # 내용이 같아도 '가야 할 곳'이 달라졌으면 다시 올려야 한다. 목적지를 안 보면
+  # 미분류로 갔던 전사가 짝 녹음이 생겨도 영영 미분류에 남는다.
+  if [ "$seen" = "$lmd5" ] && [ "$seen_rel" = "$target_rel" ]; then
+    # 내용도 목적지도 그대로, mtime 만 바뀐 경우 — 장부만 갱신하고 넘어간다
     local t2="$LEDGER.tmp"
     awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$t2" 2>/dev/null || : > "$t2"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$src" "$lmd5" "$seen_rel" "$(date '+%Y-%m-%d %H:%M:%S')" "$size" "$mtime" >> "$t2"
@@ -357,7 +393,6 @@ copy_file() {
 
   # 덮어쓰기는 '내가 전에 바로 그 자리에 올린 것'을 갱신할 때만 허용한다.
   # 그 외에는 남의 파일일 수 있으므로 이름을 달리해 올린다.
-  target_rel="$rdir/$(basename "$src")"
   if [ "$conflict" = "update" ]; then
     if [ "$seen_rel" = "$target_rel" ]; then conflict="overwrite"; else conflict="rename"; fi
   fi
@@ -383,7 +418,7 @@ collect_candidates() {
     [ -n "$d" ] || continue
     d=$(resolve_dir "$d"); [ -d "$d" ] || continue
     find "$d" -type f \( "${args[@]}" \) ! -name '.*' ! -name '*.pending' ! -name '*.trashed*' 2>/dev/null
-  done < <(printf '%s\n' $WATCH_DIRS) | exclude_call_paths
+  done < <(split_dirs "$WATCH_DIRS") | exclude_call_paths
 }
 
 # 폰 전체에서 '진짜 사진'만 골라낸다. 앱 캐시·썸네일·다운로드 임시파일은 건너뛴다 —
@@ -392,7 +427,8 @@ discover_all() {
   local root real args=() ext
   for ext in $(all_extensions); do args+=(-iname "*.${ext}" -o); done
   unset 'args[${#args[@]}-1]'
-  for root in $MIGRATE_ROOTS; do
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
     real=$(resolve_dir "$root"); [ -d "$real" ] || continue
     find "$real" \
       \( -name '.thumbnails' -o -name 'cache' -o -name 'Cache' -o -name '.cache' \
@@ -401,24 +437,34 @@ discover_all() {
       ! -name '.*' ! -name '*.pending' ! -name '*.trashed*' \
       ! -path "$TRASH_DIR/*" ! -path "$STATE_DIR/*" \
       -print 2>/dev/null
-  done | exclude_call_paths
+  done < <(split_dirs "$MIGRATE_ROOTS") | exclude_call_paths
 }
 
 # 통화 녹음 폴더는 사진·동영상 훑기에서 뺀다. 녹취는 "폰에 남긴다"가 정책인데
 # migrate 가 휴지통으로 옮겨 버리면 정책이 정면으로 뒤집힌다.
 exclude_call_paths() {
-  local cdirs line d skip
-  # 통화녹취를 켜지 않았다면 제외하면 안 된다. 제외했는데 calls 도 안 돌면 그
-  # 폴더의 파일은 어느 쪽으로도 백업되지 않으면서 "폰이 비었다"고 보고된다.
-  [ "$CALL_ENABLED" = "1" ] || { cat; return; }
+  local cdirs line d skip lower e in_call
   cdirs=$(discover_call_dirs 2>/dev/null)
   if [ -z "$cdirs" ]; then cat; return; fi
   while IFS= read -r line; do
-    skip=0
+    in_call=0
     while IFS= read -r d; do
       [ -n "$d" ] || continue
-      case "$line" in "$d"/*) skip=1; break ;; esac
+      case "$line" in "$d"/*) in_call=1; break ;; esac
     done <<< "$cdirs"
+    if [ "$in_call" = "0" ]; then printf '%s\n' "$line"; continue; fi
+
+    # 통화 폴더 안이다. 켜 두었다면 calls 가 맡으므로 전부 뺀다.
+    [ "$CALL_ENABLED" = "1" ] && continue
+
+    # 꺼져 있어도 '녹음·전사 파일'은 사진 정책(올리고 폰에서 치움)에 넘기면 안 된다.
+    # 통화녹취는 옵트인인데, 끈 상태에서 migrate 가 녹음을 지워 버리면 그 약속이
+    # 깨진다. 반대로 그 폴더의 진짜 사진까지 빼면 어디에도 백업되지 않는다.
+    lower=$(printf '%s' "${line##*.}" | tr 'A-Z' 'a-z')
+    skip=0
+    for e in $CALL_EXTENSIONS $TRANSCRIPT_EXTENSIONS; do
+      [ "$lower" = "$e" ] && { skip=1; break; }
+    done
     [ "$skip" = "0" ] && printf '%s\n' "$line"
   done
 }
@@ -516,6 +562,12 @@ cmd_migrate() {
   while IFS= read -r f; do
     i=$((i + 1))
     [ -f "$f" ] || continue
+    # 도중에 Wi-Fi 가 끊기면 멈춘다. 시작할 때 한 번만 확인하면, 요금을 지키려고
+    # 켠 설정이 시작 순간만 지키고 남은 수십 GB 는 셀룰러로 나간다.
+    if [ "$REQUIRE_WIFI" = "1" ] && [ $((i % 20)) = 0 ] && ! wifi_ok; then
+      log WARN "Wi-Fi 가 끊겨 이관을 중단한다 ($i/$count). 다시 연결한 뒤 migrate 를 재실행해라."
+      break
+    fi
     process_file "$f" "$MIGRATE_LAYOUT"; local prc=$?
     case $prc in
       0) clear_failure "$f"; n_ok=$((n_ok + 1)) ;;
@@ -591,10 +643,21 @@ cmd_watch() {
 
 # --------------------------------------------------------------------- 휴지통 정리
 cmd_purge() {
-  local quiet="${1:-}" n=0 f
+  local quiet="${1:-}" n=0 f base ymd hms epoch cutoff
+  cutoff=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
   while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    base=$(basename "$f")
+    # 휴지통 파일 이름은 우리가 붙인 'YYYYmmdd-HHMMSS-원래이름' 이다. 이 접두사가
+    # '버린 시각'이다. 파일 mtime 은 촬영 시각이라 보관 기간의 기준이 될 수 없다.
+    ymd=$(printf '%s' "$base" | sed -n 's/^\([0-9]\{8\}\)-[0-9]\{6\}-.*/\1/p')
+    hms=$(printf '%s' "$base" | sed -n 's/^[0-9]\{8\}-\([0-9]\{6\}\)-.*/\1/p')
+    # 접두사를 읽지 못하면 지우지 않는다. 모를 때는 보존이 안전하다.
+    [ -n "$ymd" ] && [ -n "$hms" ] || continue
+    epoch=$(date -d "${ymd:0:4}-${ymd:4:2}-${ymd:6:2} ${hms:0:2}:${hms:2:2}:${hms:4:2}" +%s 2>/dev/null) || continue
+    [ "$epoch" -le "$cutoff" ] || continue
     rm -f "$f" && n=$((n + 1))
-  done < <(find "$TRASH_DIR" -type f ! -name 'manifest.tsv' -mtime "+$RETENTION_DAYS" 2>/dev/null)
+  done < <(find "$TRASH_DIR" -type f ! -name 'manifest.tsv' 2>/dev/null)
   if [ "$n" -gt 0 ]; then
     log INFO "휴지통에서 ${RETENTION_DAYS}일 지난 $n건 완전 삭제"
   elif [ "$quiet" != "quiet" ]; then
@@ -750,8 +813,8 @@ RCLONE_REMOTE="$RCLONE_REMOTE"
 DRIVE_FOLDER="$folder"
 WATCH_DIRS="$cam"
 MIGRATE_ROOTS="$roots"
-LAYOUT="date"
-MIGRATE_LAYOUT="mirror"
+LAYOUT="$LAYOUT"
+MIGRATE_LAYOUT="$MIGRATE_LAYOUT"
 EXTENSIONS="$EXTENSIONS"
 VIDEO_EXTENSIONS="$VIDEO_EXTENSIONS"
 VIDEO_DRIVE_FOLDER="$vfolder"
@@ -767,6 +830,10 @@ CALL_DRIVE_UNKNOWN="$CALL_DRIVE_UNKNOWN"
 CALL_IN_PATTERN="$CALL_IN_PATTERN"
 CALL_OUT_PATTERN="$CALL_OUT_PATTERN"
 CALL_LOG_WINDOW=$CALL_LOG_WINDOW
+
+# 기본값과 다르게 두었다면 그대로 지킨다
+$([ -n "${TRASH_DIR:-}" ] && [ "$TRASH_DIR" != "$STATE_DIR/trash" ] && printf 'TRASH_DIR="%s"' "$TRASH_DIR")
+$([ -n "${LOG_FILE:-}" ] && [ "$LOG_FILE" != "$STATE_DIR/autobackup.log" ] && printf 'LOG_FILE="%s"' "$LOG_FILE")
 MIN_AGE_SECONDS=$MIN_AGE_SECONDS
 POLL_SECONDS=$POLL_SECONDS
 RETENTION_DAYS=$RETENTION_DAYS
@@ -1162,7 +1229,10 @@ cmd_probe() {
 
 # ------------------------------------------------------------------- 자체 업데이트
 # 폰에서 긴 URL 을 붙여넣는 건 고역이다. 스크립트가 스스로 최신본을 받아오게 한다.
-UPDATE_URL="${UPDATE_URL:-https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts/photo-autobackup.sh}"
+# 브랜치가 머지되어 사라져도 갱신이 죽지 않게, main 을 먼저 보고 브랜치로 물러선다.
+UPDATE_BASE="https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator"
+UPDATE_PATH=".claude/skills/photo-drive-autobackup/scripts/photo-autobackup.sh"
+UPDATE_URLS="${UPDATE_URL:-$UPDATE_BASE/main/$UPDATE_PATH $UPDATE_BASE/claude/auto-photo-upload-delete-4prnja/$UPDATE_PATH}"
 
 cmd_update() {
   local self tmp newver
@@ -1177,8 +1247,14 @@ cmd_update() {
 
   tmp="$(mktemp)"
   echo "내려받는 중..."
-  if ! curl -fsSL "$UPDATE_URL" -o "$tmp"; then
-    rm -f "$tmp"; die "내려받기 실패. 인터넷 연결을 확인해라."
+  local u got=0
+  for u in $UPDATE_URLS; do
+    if curl -fsSL "$u" -o "$tmp" && [ -s "$tmp" ]; then got=1; break; fi
+  done
+  if [ "$got" = "0" ]; then
+    rm -f "$tmp"
+    die "내려받기 실패. 인터넷 연결을 확인하거나, 저장소 주소가 바뀌었는지 확인해라:
+     $UPDATE_URLS"
   fi
   # 받다 만 파일로 덮어쓰면 도구 자체가 죽는다. 실행 가능한지 먼저 본다.
   if ! bash -n "$tmp" 2>/dev/null; then
@@ -1252,10 +1328,11 @@ cmd_doctor() {
     fi
   fi
 
-  for d in $MIGRATE_ROOTS; do
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
     d=$(resolve_dir "$d")
     [ -d "$d" ] && echo "  [OK] 이관 검사 범위 접근 가능: $d" || { echo "  [실패] 이관 범위 없음: $d"; ok=0; }
-  done
+  done < <(split_dirs "$MIGRATE_ROOTS")
 
   [ -w "$TRASH_DIR" ] && echo "  [OK] 휴지통 쓰기 가능: $TRASH_DIR" || { echo "  [실패] 휴지통 접근 불가: $TRASH_DIR"; ok=0; }
   if [ "$fix" = 1 ] && have pkg; then

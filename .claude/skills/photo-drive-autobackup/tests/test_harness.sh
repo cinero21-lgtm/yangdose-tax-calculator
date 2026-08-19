@@ -706,6 +706,98 @@ chmod +x "$ROOT/bin/md5sum"; export MD5_HITS="$ROOT/md5-hits"
 check "재스윕에서 해싱 0회"        0 "$(wc -l < "$ROOT/md5-hits" | tr -d ' ')"
 rm -f "$ROOT/bin/md5sum"; unset MD5_HITS
 
+# ============ 5차 감수 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+TRASH="$HOME/.local/share/photo-autobackup/trash"
+
+echo "== 67. [치명] 보관 기간은 '버린 날' 기준이다 (찍은 날 아님) =="
+mkdir -p "$TRASH"
+# 방금 버렸지만 촬영은 1년 전인 사진
+NOWSTAMP=$(date '+%Y%m%d-%H%M%S')
+echo old > "$TRASH/${NOWSTAMP}-작년사진.jpg"
+touch -d '1 year ago' "$TRASH/${NOWSTAMP}-작년사진.jpg"
+# 31일 전에 버린 사진(접두사 기준)
+OLDSTAMP=$(date -d '31 days ago' '+%Y%m%d-%H%M%S')
+echo veryold > "$TRASH/${OLDSTAMP}-오래전버림.jpg"
+"$SKILL/scripts/photo-autobackup.sh" purge >/dev/null 2>&1
+check "방금 버린 것은 보존"       1 "$(ls "$TRASH/${NOWSTAMP}-작년사진.jpg" 2>/dev/null | wc -l)"
+check "31일 전 버린 것은 삭제"    0 "$(ls "$TRASH/${OLDSTAMP}-오래전버림.jpg" 2>/dev/null | wc -l)"
+
+echo "== 68. 접두사를 못 읽는 파일은 지우지 않는다 (모르면 보존) =="
+echo mystery > "$TRASH/이름이이상한파일.jpg"
+touch -d '2 years ago' "$TRASH/이름이이상한파일.jpg"
+"$SKILL/scripts/photo-autobackup.sh" purge >/dev/null 2>&1
+check "판단 불가 파일 보존"       1 "$(ls "$TRASH/이름이이상한파일.jpg" 2>/dev/null | wc -l)"
+rm -f "$TRASH"/*.jpg
+
+echo "== 69. 통화녹취를 꺼도 녹음 파일은 사진 이관에 휩쓸리지 않는다 =="
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg7.bak"
+sed -i 's/^CALL_ENABLED=1/CALL_ENABLED=0/' "$HOME/.config/photo-autobackup/config.env"
+echo "rec" > "$CALLDIR/수신 꺼짐테스트 260819.3gp"
+echo "pic" > "$CALLDIR/폴더안사진.jpg"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "녹음(.3gp)은 폰에 남음"    1 "$(ls "$CALLDIR/수신 꺼짐테스트 260819.3gp" 2>/dev/null | wc -l)"
+check "녹음이 휴지통에 없음"      0 "$(find "$TRASH" -name '*꺼짐테스트*' 2>/dev/null | wc -l)"
+check "같은 폴더 사진은 이관됨"   0 "$(ls "$CALLDIR/폴더안사진.jpg" 2>/dev/null | wc -l)"
+cp "$ROOT/cfg7.bak" "$HOME/.config/photo-autobackup/config.env"
+rm -f "$CALLDIR"/*
+
+echo "== 70. 공백이 든 감시 폴더도 동작한다 =="
+SPACEDCAM="$SHARED/DCIM/My Photos"
+mkdir -p "$SPACEDCAM"
+echo "sp" > "$SPACEDCAM/공백폴더사진.jpg"
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg8.bak"
+printf 'WATCH_DIRS="%s"\n' "$SPACEDCAM" >> "$HOME/.config/photo-autobackup/config.env"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "공백 감시폴더에서 처리됨"  0 "$(ls "$SPACEDCAM/공백폴더사진.jpg" 2>/dev/null | wc -l)"
+cp "$ROOT/cfg8.bak" "$HOME/.config/photo-autobackup/config.env"; rm -rf "$SPACEDCAM"
+
+echo "== 71. 휴지통 이름이 같은 초에 겹쳐도 한 장도 잃지 않는다 =="
+rm -f "$TRASH"/*.jpg
+mkdir -p "$SHARED/DCIM/A" "$SHARED/DCIM/B"
+echo "첫번째" > "$SHARED/DCIM/A/같은이름.jpg"
+echo "두번째" > "$SHARED/DCIM/B/같은이름.jpg"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "휴지통에 두 장 모두 있음"  2 "$(find "$TRASH" -name '*같은이름*' 2>/dev/null | wc -l)"
+contents=$(find "$TRASH" -name '*같은이름*' -exec cat {} \; | sort | tr '\n' ',')
+check "내용이 서로 다름"          "두번째,첫번째," "$contents"
+rm -rf "$SHARED/DCIM/A" "$SHARED/DCIM/B"
+
+echo "== 72. setup 이 LAYOUT 설정을 되돌리지 않는다 =="
+cp "$HOME/.config/photo-autobackup/config.env" "$ROOT/cfg9.bak"
+sed -i 's/^LAYOUT=.*/LAYOUT="mirror"/' "$HOME/.config/photo-autobackup/config.env"
+"$SKILL/scripts/photo-autobackup.sh" setup "Z폴드 8 사진" "Z폴드 8 동영상" >/dev/null 2>&1
+check "LAYOUT 보존"               1 "$(grep -c '^LAYOUT="mirror"' "$HOME/.config/photo-autobackup/config.env")"
+cp "$ROOT/cfg9.bak" "$HOME/.config/photo-autobackup/config.env"
+
+echo "== 73. 원격 해시를 못 읽으면 덮어쓰지 않는다 (fail-closed) =="
+rm -f "$CALLDIR"/*
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+mkdir -p "$ROOT/remote/수신녹취/$YM"
+echo "소중한 기존 파일" > "$ROOT/remote/수신녹취/$YM/수신 해시불가 260819.m4a"
+echo "새 내용" > "$CALLDIR/수신 해시불가 260819.m4a"
+RCLONE_HASH_BLIND=1 "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "기존 파일 보존됨"          "소중한 기존 파일" "$(cat "$ROOT/remote/수신녹취/$YM/수신 해시불가 260819.m4a")"
+rm -f "$CALLDIR"/*
+
+echo "== 74. 미분류 전사가 짝을 만나면 제자리를 찾는다 =="
+rm -rf "$ROOT/remote/수신녹취" "$ROOT/remote/통화녹취_미분류"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "전사만 먼저" > "$CALLDIR/수신 나중짝 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "처음엔 미분류로"           1 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/수신 나중짝 260819.txt" 2>/dev/null | wc -l)"
+echo "audio" > "$CALLDIR/수신 나중짝 260819.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "짝이 생기면 수신녹취로"    1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 나중짝 260819.txt" 2>/dev/null | wc -l)"
+rm -f "$CALLDIR"/*
+
+echo "== 75. 갱신 주소가 브랜치 하나에 매여 있지 않다 =="
+check "main 주소 포함"            1 "$(grep -c 'UPDATE_BASE/main/\$UPDATE_PATH' "$SKILL/scripts/photo-autobackup.sh")"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
