@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ---------------------------------------------------------------- 설정 기본값
@@ -42,6 +42,20 @@ MIGRATE_ROOTS="$HOME/storage/shared"
 # 1이면 Wi-Fi에 붙어 있을 때만 업로드한다.
 REQUIRE_WIFI=0
 
+# --- 통화녹취 -----------------------------------------------------------------
+# 기본은 꺼져 있다. 통화 녹취에는 상대방 음성이 담기므로, 사용자가 명시적으로
+# 켜기 전에 클라우드로 올라가면 사고다.
+CALL_ENABLED=0
+CALL_DIRS=""                       # 비면 자동 탐색
+CALL_EXTENSIONS="m4a mp3 amr wav aac 3gpp"
+TRANSCRIPT_EXTENSIONS="txt md json srt vtt"
+CALL_DRIVE_IN="수신녹취"
+CALL_DRIVE_OUT="발신통화녹취"
+CALL_DRIVE_UNKNOWN="통화녹취_미분류"
+CALL_IN_PATTERN="수신|받은|incoming|_in_|^in[-_]"
+CALL_OUT_PATTERN="발신|건|outgoing|_out_|^out[-_]"
+CALL_LOG_WINDOW=90                 # 통화기록 대조 허용 오차(초)
+
 load_config() {
   if [ -f "$CONFIG_FILE" ]; then
     # shellcheck disable=SC1090
@@ -51,9 +65,11 @@ load_config() {
   LOG_FILE="${LOG_FILE:-$STATE_DIR/autobackup.log}"
   MANIFEST="$TRASH_DIR/manifest.tsv"
   FAILURES="$STATE_DIR/failures.tsv"
+  LEDGER="$STATE_DIR/uploaded.tsv"
   mkdir -p "$STATE_DIR" "$TRASH_DIR" "$(dirname "$LOG_FILE")"
   [ -f "$MANIFEST" ] || printf 'moved_at\toriginal_path\ttrash_path\tremote_path\tmd5\n' > "$MANIFEST"
   [ -f "$FAILURES" ] || : > "$FAILURES"
+  [ -f "$LEDGER" ] || : > "$LEDGER"
 }
 
 # ------------------------------------------------------------------- 유틸리티
@@ -500,6 +516,7 @@ cmd_watch() {
   log INFO "감시 시작 (v$VERSION, 주기 ${POLL_SECONDS}s, 대상: $WATCH_DIRS)"
   while :; do
     cmd_once
+    [ "$CALL_ENABLED" = "1" ] && cmd_calls >/dev/null 2>&1
     if have inotifywait; then
       # 새 파일이 생기면 즉시 깨어나고, 아무 일 없으면 주기마다 한 번 돈다.
       # shellcheck disable=SC2086
@@ -735,6 +752,255 @@ GUIDE
   return 1
 }
 
+# ===================================================================== 통화녹취
+# 사진과 정책이 다르다: 올리되 폰에서 지우지 않는다(복사). 녹취는 작고, 사용자가
+# 폰에서도 바로 듣기를 원하기 때문이다.
+
+# 녹음 폴더는 기종·One UI 버전마다 다르다. 하나를 고정하면 다른 기기에서 통째로
+# 실패하므로, 있는 것만 골라 쓴다.
+discover_call_dirs() {
+  local d real shared
+  if [ -n "$CALL_DIRS" ]; then
+    for d in $CALL_DIRS; do
+      real=$(resolve_dir "$d"); [ -d "$real" ] && printf '%s\n' "$real"
+    done
+    return
+  fi
+  shared=$(resolve_dir "$HOME/storage/shared")
+  for d in "$shared/Recordings/Call" "$shared/Recordings" "$shared/Call" "$shared/Sounds"; do
+    [ -d "$d" ] && printf '%s\n' "$d"
+  done
+}
+
+# 통화기록에서 파일 시각과 가장 가까운 항목의 방향을 읽는다.
+# termux-call-log 출력은 JSON 배열이며 각 항목에 type(INCOMING/OUTGOING)과
+# date("2026-08-19 14:32:00")가 들어 있다. jq 없이 처리한다 — 폰에 없을 수 있다.
+direction_from_call_log() {
+  local mtime="$1" line type date_s epoch diff best_diff="" best=""
+  have termux-call-log || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      *'"type"'*)  type=$(printf '%s' "$line" | sed 's/.*: *"\([^"]*\)".*/\1/') ;;
+      *'"date"'*)
+        date_s=$(printf '%s' "$line" | sed 's/.*: *"\([^"]*\)".*/\1/')
+        epoch=$(date -d "$date_s" +%s 2>/dev/null) || continue
+        diff=$(( mtime > epoch ? mtime - epoch : epoch - mtime ))
+        if [ -z "$best_diff" ] || [ "$diff" -lt "$best_diff" ]; then
+          best_diff="$diff"; best="$type"
+        fi ;;
+    esac
+  done < <(termux-call-log -l 50 2>/dev/null)
+  [ -n "$best_diff" ] || return 1
+  [ "$best_diff" -le "$CALL_LOG_WINDOW" ] || return 1
+  case "$best" in
+    INCOMING) printf 'in' ;;
+    OUTGOING) printf 'out' ;;
+    *) return 1 ;;
+  esac
+}
+
+# in / out / unknown 중 하나. 추측하지 않는다 — 모르면 unknown 이다.
+# 잘못 분류하면 나중에 통화 내역 전체를 신뢰할 수 없게 된다.
+call_direction() {
+  local f="$1" base mtime dir
+  base=$(basename "$f")
+  if printf '%s' "$base" | grep -qiE "$CALL_IN_PATTERN";  then printf 'in';  return; fi
+  if printf '%s' "$base" | grep -qiE "$CALL_OUT_PATTERN"; then printf 'out'; return; fi
+  mtime=$(stat -c %Y "$f" 2>/dev/null) || { printf 'unknown'; return; }
+  if dir=$(direction_from_call_log "$mtime"); then printf '%s' "$dir"; return; fi
+  printf 'unknown'
+}
+
+call_folder_for() {
+  case "$1" in
+    in)  printf '%s' "$CALL_DRIVE_IN" ;;
+    out) printf '%s' "$CALL_DRIVE_OUT" ;;
+    *)   printf '%s' "$CALL_DRIVE_UNKNOWN" ;;
+  esac
+}
+
+# 녹음 파일과 같은 이름의 전사 파일을 찾는다. 없으면 빈 문자열.
+transcript_for() {
+  local audio="$1" stem ext cand
+  stem="${audio%.*}"
+  for ext in $TRANSCRIPT_EXTENSIONS; do
+    for cand in "$stem.$ext" "$stem.${ext^^}"; do
+      [ -f "$cand" ] && { printf '%s' "$cand"; return 0; }
+    done
+  done
+  return 1
+}
+
+is_transcript() {
+  local lower ext
+  lower=$(printf '%s' "${1##*.}" | tr 'A-Z' 'a-z')
+  for ext in $TRANSCRIPT_EXTENSIONS; do [ "$lower" = "$ext" ] && return 0; done
+  return 1
+}
+
+find_call_files() {
+  local d args=() ext
+  for ext in $CALL_EXTENSIONS $TRANSCRIPT_EXTENSIONS; do args+=(-iname "*.${ext}" -o); done
+  [ ${#args[@]} -gt 0 ] && unset 'args[${#args[@]}-1]'
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    find "$d" -type f \( "${args[@]}" \) ! -name '.*' 2>/dev/null
+  done < <(discover_call_dirs)
+}
+
+# 녹취는 연/연-월로 정리한다. 통화는 "언제"로 찾는 자료이기 때문이다.
+call_remote_dir() {
+  local f="$1" folder="$2" ymd
+  ymd=$(date -d "@$(stat -c %Y "$f")" '+%Y/%Y-%m' 2>/dev/null) || ymd=$(date '+%Y/%Y-%m')
+  printf '%s/%s' "$folder" "$ymd"
+}
+
+cmd_calls() {
+  local f dirq n_up=0 n_skip=0 n_fail=0 n_tr=0 seen_tr=0
+  if [ "$CALL_ENABLED" != "1" ]; then
+    echo "통화녹취 기능이 꺼져 있다. 켜려면 설정 파일에 CALL_ENABLED=1 을 넣어라:"
+    echo "  $CONFIG_FILE"
+    echo "먼저 'photo-autobackup.sh probe' 로 폰에 무엇이 있는지 확인하는 것을 권한다."
+    return 1
+  fi
+  wifi_ok || { log INFO "Wi-Fi 대기 중 — 통화녹취 스윕을 건너뛴다"; return 0; }
+
+  local dirs; dirs=$(discover_call_dirs | tr '\n' ' ')
+  [ -n "$dirs" ] || { log WARN "녹음 폴더를 찾지 못했다. CALL_DIRS 를 직접 지정해라."; return 1; }
+  log INFO "통화녹취 스윕 시작 — 대상 폴더: $dirs"
+
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    is_stable "$f" || { n_skip=$((n_skip + 1)); continue; }
+
+    local dir folder rdir tr rc
+    if is_transcript "$f"; then
+      seen_tr=$((seen_tr + 1))
+      # 짝이 되는 녹음이 있으면 그 녹음을 처리할 때 함께 올린다. 여기서는 건너뛴다.
+      local stem has_audio=0 ext
+      stem="${f%.*}"
+      for ext in $CALL_EXTENSIONS; do
+        [ -f "$stem.$ext" ] && { has_audio=1; break; }
+      done
+      [ "$has_audio" = "1" ] && continue
+      # 짝 없는 전사 — 미분류로 올린다. 버리면 안 되는 자료다.
+      rdir=$(call_remote_dir "$f" "$CALL_DRIVE_UNKNOWN")
+      copy_file "$f" "$rdir"; rc=$?
+      case $rc in
+        0) n_up=$((n_up + 1)); n_tr=$((n_tr + 1)) ;;
+        2) n_skip=$((n_skip + 1)) ;;
+        *) n_fail=$((n_fail + 1)) ;;
+      esac
+      continue
+    fi
+
+    dir=$(call_direction "$f")
+    folder=$(call_folder_for "$dir")
+    rdir=$(call_remote_dir "$f" "$folder")
+
+    copy_file "$f" "$rdir"; rc=$?
+    case $rc in
+      0) n_up=$((n_up + 1)) ;;
+      2) n_skip=$((n_skip + 1)) ;;
+      *) n_fail=$((n_fail + 1)); continue ;;
+    esac
+
+    # 전사 파일은 녹음과 같은 폴더로 함께 올린다. 짝이 떨어지면 나중에 못 찾는다.
+    if tr=$(transcript_for "$f"); then
+      seen_tr=$((seen_tr + 1))
+      copy_file "$tr" "$rdir"; rc=$?
+      case $rc in
+        0) n_up=$((n_up + 1)); n_tr=$((n_tr + 1)) ;;
+        2) : ;;
+        *) n_fail=$((n_fail + 1)) ;;
+      esac
+    fi
+  done < <(find_call_files)
+
+  log INFO "통화녹취 스윕 종료 — 업로드 $n_up건(전사 $n_tr), 건너뜀 $n_skip건, 실패 $n_fail건"
+  if [ "$seen_tr" = "0" ]; then
+    log INFO "전사 파일을 하나도 찾지 못했다. 앱이 텍스트를 파일로 저장하지 않거나 다른 위치일 수 있다 — probe 로 확인해라."
+  fi
+  return 0
+}
+
+# ------------------------------------------------------- 폰에 무엇이 있는지 조사
+# 읽기 전용. 아무것도 올리거나 지우지 않는다.
+cmd_probe() {
+  local shared d n sample f cnt
+  shared=$(resolve_dir "$HOME/storage/shared")
+  echo "========== 통화녹취 환경 조사 (v$VERSION) =========="
+  echo
+
+  echo "[1] 녹음 폴더 후보"
+  local found=0
+  for d in "$shared/Recordings/Call" "$shared/Recordings" "$shared/Call" "$shared/Sounds"; do
+    if [ -d "$d" ]; then
+      n=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
+      printf '  [있음] %-45s 파일 %s건\n' "${d#$shared/}" "$n"
+      found=1
+    else
+      printf '  [없음] %s\n' "${d#$shared/}"
+    fi
+  done
+  [ "$found" = "1" ] || echo "  → 후보가 하나도 없다. 통화 녹음 설정이 꺼져 있을 수 있다."
+  echo
+
+  echo "[2] 확장자별 분포 (녹음 폴더 안)"
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    find "$d" -type f 2>/dev/null | sed 's/.*\.//' | tr 'A-Z' 'a-z' | sort | uniq -c | sort -rn | head -8 \
+      | awk '{printf "  %6d건  .%s\n", $1, $2}'
+  done < <(discover_call_dirs)
+  echo
+
+  echo "[3] 파일 이름 샘플 (최근 5건) — 수신/발신이 이름에 적히는지 본다"
+  cnt=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '  %s\n' "$(basename "$f")"
+    printf '      판정: %s\n' "$(call_direction "$f")"
+    cnt=$((cnt + 1)); [ "$cnt" -ge 5 ] && break
+  done < <(find_call_files 2>/dev/null | head -20)
+  [ "$cnt" = "0" ] && echo "  (녹음 파일 없음)"
+  echo
+
+  echo "[4] 전사(텍스트) 파일"
+  local tn=0
+  while IFS= read -r f; do
+    is_transcript "$f" && { tn=$((tn + 1)); [ "$tn" -le 3 ] && printf '  %s\n' "$(basename "$f")"; }
+  done < <(find_call_files 2>/dev/null)
+  if [ "$tn" = "0" ]; then
+    echo "  없음 — 앱이 전사를 파일로 저장하지 않거나, 앱 내부 저장소에만 둔다."
+    echo "  이 경우 녹취(음성)만 올리고 전사는 앱의 내보내기/공유 기능을 써야 한다."
+  else
+    echo "  총 ${tn}건 발견"
+  fi
+  echo
+
+  echo "[5] 통화기록 API (파일명으로 판정 안 될 때 쓰는 수단)"
+  if have termux-call-log; then
+    if termux-call-log -l 1 >/dev/null 2>&1; then
+      echo "  [OK] 사용 가능 — 파일명에 수신/발신이 없어도 시각 대조로 판정한다"
+    else
+      echo "  [실패] 명령은 있으나 권한이 없다."
+      echo "         설정 > 애플리케이션 > Termux:API > 권한 > 통화기록 허용"
+    fi
+  else
+    echo "  [없음] pkg install termux-api"
+    echo "         없으면 파일명으로 판정 못 한 녹취는 전부 '$CALL_DRIVE_UNKNOWN' 로 간다"
+  fi
+  echo
+
+  echo "[6] 현재 설정"
+  echo "  CALL_ENABLED = $CALL_ENABLED $([ "$CALL_ENABLED" = "1" ] && echo '(켜짐)' || echo '(꺼짐 — 켜야 동작한다)')"
+  echo "  수신 → $RCLONE_REMOTE:$CALL_DRIVE_IN/"
+  echo "  발신 → $RCLONE_REMOTE:$CALL_DRIVE_OUT/"
+  echo "  미분류 → $RCLONE_REMOTE:$CALL_DRIVE_UNKNOWN/"
+  echo "  정책: 업로드 후에도 폰에 그대로 둔다(복사)"
+  echo "=================================================="
+}
+
 # ------------------------------------------------------------------- 자체 업데이트
 # 폰에서 긴 URL 을 붙여넣는 건 고역이다. 스크립트가 스스로 최신본을 받아오게 한다.
 UPDATE_URL="${UPDATE_URL:-https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator/claude/auto-photo-upload-delete-4prnja/.claude/skills/photo-drive-autobackup/scripts/photo-autobackup.sh}"
@@ -885,6 +1151,8 @@ usage() {
   cat <<'USAGE'
 사용법: photo-autobackup.sh <명령>
 
+  probe            통화녹취 환경 조사 (읽기 전용 — 아무것도 올리거나 지우지 않는다)
+  calls            통화녹취를 올린다. 폰에서는 지우지 않는다(복사)
   update           스크립트를 최신본으로 갱신 (긴 URL 붙여넣기 불필요)
   perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
   setup [사진폴더] [동영상폴더]
@@ -908,6 +1176,8 @@ USAGE
 main() {
   load_config
   case "${1:-}" in
+    probe)          cmd_probe ;;
+    calls)          cmd_calls ;;
     update)         cmd_update ;;
     perm)           cmd_perm ;;
     setup)          shift; cmd_setup "${1:-}" "${2:-}" ;;

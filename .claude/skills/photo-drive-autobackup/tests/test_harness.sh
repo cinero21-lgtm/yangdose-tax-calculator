@@ -296,6 +296,96 @@ out=$(UPDATE_URL="file://$ROOT/newer.sh" PATH="$ROOT/bin:$PATH" \
 check "다른 버전이면 화살표 표기" 1 "$(echo "$out" | grep -c '\-> v99.0.0')"
 rm -f "$ROOT/bin/pab-v.sh"*
 
+# ======================= 통화녹취 =======================
+CALLDIR="$SHARED/Recordings/Call"
+mkdir -p "$CALLDIR"
+cat >> "$HOME/.config/photo-autobackup/config.env" <<CFG
+CALL_DRIVE_IN="수신녹취"
+CALL_DRIVE_OUT="발신통화녹취"
+CALL_DRIVE_UNKNOWN="통화녹취_미분류"
+CFG
+YM="$(date +%Y)/$(date +%Y-%m)"
+
+echo "== 28. CALL_ENABLED=0 이면 아무것도 하지 않는다 =="
+echo "audio" > "$CALLDIR/수신 홍길동 260819.m4a"
+out=$("$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "꺼져 있다고 안내"        1 "$(echo "$out" | grep -c 'CALL_ENABLED=1')"
+check "업로드 안 함"            0 "$(find "$ROOT/remote" -name '*.m4a' 2>/dev/null | wc -l)"
+echo 'CALL_ENABLED=1' >> "$HOME/.config/photo-autobackup/config.env"
+
+echo "== 29. 파일명으로 수신/발신을 가른다 =="
+echo "out-audio" > "$CALLDIR/발신 김철수 260819.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "수신은 수신녹취로"        1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 홍길동 260819.m4a" 2>/dev/null | wc -l)"
+check "발신은 발신통화녹취로"    1 "$(ls "$ROOT/remote/발신통화녹취/$YM/발신 김철수 260819.m4a" 2>/dev/null | wc -l)"
+
+echo "== 30. 복사 정책 — 올린 뒤에도 폰에 그대로 남는다 =="
+check "녹음 파일 폰에 유지"      2 "$(ls "$CALLDIR"/*.m4a 2>/dev/null | wc -l)"
+
+echo "== 31. 장부 덕에 두 번째 스윕은 재업로드하지 않는다 =="
+out=$("$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "업로드 0건"              1 "$(echo "$out" | grep -c '업로드 0건')"
+check "건너뜀으로 집계"          1 "$(echo "$out" | grep -cE '건너뜀 [1-9][0-9]*건')"
+
+echo "== 32. 내용이 바뀌면 다시 올린다 =="
+echo "audio-changed" > "$CALLDIR/수신 홍길동 260819.m4a"
+out=$("$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "변경분 재업로드"          1 "$(echo "$out" | grep -c '업로드 1건')"
+
+echo "== 33. 전사 파일이 녹음과 같은 폴더로 함께 간다 =="
+echo "전사 본문입니다" > "$CALLDIR/수신 홍길동 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "전사가 수신녹취로"        1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 홍길동 260819.txt" 2>/dev/null | wc -l)"
+check "전사도 폰에 유지"         1 "$(ls "$CALLDIR"/*.txt 2>/dev/null | wc -l)"
+
+echo "== 34. 판정 불가면 추측하지 않고 미분류로 =="
+echo "mystery" > "$CALLDIR/20260819_150000.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "미분류 폴더로"            1 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/20260819_150000.m4a" 2>/dev/null | wc -l)"
+check "수신녹취에 안 섞임"       0 "$(ls "$ROOT/remote/수신녹취/$YM/20260819_150000.m4a" 2>/dev/null | wc -l)"
+
+echo "== 35. 통화기록으로 판정한다 (파일명에 단서가 없을 때) =="
+cat > "$ROOT/bin/termux-call-log" <<'TCL'
+#!/usr/bin/env bash
+now=$(stat -c %Y "$CALL_LOG_TARGET" 2>/dev/null || date +%s)
+printf '[\n  {\n    "type": "OUTGOING",\n    "date": "%s"\n  }\n]\n' "$(date -d "@$now" '+%Y-%m-%d %H:%M:%S')"
+TCL
+chmod +x "$ROOT/bin/termux-call-log"
+echo "via-calllog" > "$CALLDIR/20260819_160000.m4a"
+export CALL_LOG_TARGET="$CALLDIR/20260819_160000.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "통화기록 보고 발신 판정"  1 "$(ls "$ROOT/remote/발신통화녹취/$YM/20260819_160000.m4a" 2>/dev/null | wc -l)"
+rm -f "$ROOT/bin/termux-call-log"; unset CALL_LOG_TARGET
+
+echo "== 36. 짝 없는 전사도 버리지 않는다 =="
+echo "고아 전사" > "$CALLDIR/orphan-note.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "미분류로 보존"            1 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/orphan-note.txt" 2>/dev/null | wc -l)"
+
+echo "== 37. 업로드 실패는 장부에 적지 않는다 =="
+LED="$HOME/.local/share/photo-autobackup/uploaded.tsv"
+echo "will-fail" > "$CALLDIR/수신 실패테스트 260819.m4a"
+RCLONE_FAKE_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "장부에 없음"              0 "$(grep -c '실패테스트' "$LED")"
+check "원본은 폰에 그대로"       1 "$(ls "$CALLDIR/수신 실패테스트 260819.m4a" 2>/dev/null | wc -l)"
+
+echo "== 38. copy_file 은 원본을 절대 건드리지 않는다 (코드 수준 확인) =="
+# 장부 임시파일을 교체하는 mv 는 정상이다. 봐야 할 것은 "\$src 를 옮기거나 지우는가".
+body=$(sed -n '/^copy_file()/,/^}/p' "$SKILL/scripts/photo-autobackup.sh")
+check "원본을 mv 하지 않음"      0 "$(echo "$body" | grep -cE '(mv|rm)[^|]*\$src')"
+check "휴지통을 쓰지 않음"       0 "$(echo "$body" | grep -c 'TRASH_DIR')"
+check "media_scan 호출 없음"     0 "$(echo "$body" | grep -c 'media_scan')"
+# 실동작으로도 확인 — 업로드 성공 후 원본이 그대로인지는 30번에서 이미 봤다
+
+echo "== 39. probe 는 읽기 전용이다 =="
+snap_local=$(find "$CALLDIR" -type f | sort | md5sum)
+snap_remote=$(find "$ROOT/remote" -type f | sort | md5sum)
+out=$("$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "폰 파일 변화 없음"        "$snap_local" "$(find "$CALLDIR" -type f | sort | md5sum)"
+check "드라이브 변화 없음"       "$snap_remote" "$(find "$ROOT/remote" -type f | sort | md5sum)"
+check "녹음 폴더 보고"           1 "$(echo "$out" | grep -c '녹음 폴더 후보')"
+check "전사 파일 절 출력"        1 "$(echo "$out" | grep -c '전사(텍스트) 파일')"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

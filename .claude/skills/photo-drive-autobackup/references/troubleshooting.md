@@ -104,6 +104,13 @@ Wi-Fi 전용으로 하려면 `watch` 대신 `once`를 쓰고, 크론 항목 앞�
 (기기마다 판정 방법이 다르니, 간단하게는 `termux-wifi-connectioninfo` 출력에
 `supplicant_state: COMPLETED`가 있는지 보는 쪽이 안정적이다.)
 
+## 통화녹취가 안 올라간다
+
+`CALL_ENABLED=1` 인지부터 본다(기본은 꺼짐). 그다음 `photo-autobackup.sh probe`.
+증상별 대처는 `references/call-recordings.md` 의 문제 해결 표에 있다.
+
+통화녹취는 **올려도 폰에서 지우지 않는다.** 폰 용량이 안 줄어드는 게 정상이다.
+
 ## 실수로 지운 걸 되돌리고 싶다
 
 ```sh
