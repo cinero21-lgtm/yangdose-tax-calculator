@@ -29,6 +29,11 @@ case "$cmd" in
     [ -f "$p" ] || exit 1
     basename "$p"
     ;;
+  deletefile)
+    p="$REMOTE_ROOT/$(strip "$1")"
+    [ -f "$p" ] || exit 1
+    rm -f "$p"
+    ;;
   copyto)
     [ "${RCLONE_FAKE_FAIL:-0}" = "1" ] && exit 1
     dst="$REMOTE_ROOT/$(strip "$2")"
@@ -871,6 +876,69 @@ echo "새 내용" > "$CALLDIR/수신 보호 260819.m4a"
 out=$(RCLONE_HASH_BLIND=1 "$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
 check "원격 원본 보존"            "지키고 싶은 원본" "$(cat "$ROOT/remote/수신녹취/$YM/수신 보호 260819.m4a")"
 check "보류했다고 기록"           1 "$(echo "$out" | grep -c '덮어쓰지 않고 보류')"
+rm -f "$CALLDIR"/*
+
+# ============ 7차 감수 재발 방지 ============
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+rm -f "$CALLDIR"/* 2>/dev/null
+
+echo "== 81. 자동탐색 밖의 통화 녹음(.3gp)도 동영상으로 오해하지 않는다 =="
+ODD="$SHARED/MIUI/sound_recorder/call_rec"
+mkdir -p "$ODD"
+echo "call-rec" > "$ODD/통화녹음_260819.3gp"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+"$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+check "폰에 그대로 남음"          1 "$(ls "$ODD/통화녹음_260819.3gp" 2>/dev/null | wc -l)"
+check "동영상 폴더로 안 감"       0 "$(find "$ROOT/remote" -name '*통화녹음_260819*' 2>/dev/null | wc -l)"
+check "휴지통에 없음"             0 "$(find "$TRASH" -name '*통화녹음_260819*' 2>/dev/null | wc -l)"
+rm -rf "$SHARED/MIUI"
+
+echo "== 82. 환경변수 DRY_RUN 이 설정 파일을 이긴다 (예행연습이 진짜 실행 방지) =="
+grep -q '^DRY_RUN=' "$HOME/.config/photo-autobackup/config.env" || echo 'DRY_RUN=0' >> "$HOME/.config/photo-autobackup/config.env"
+sed -i 's/^DRY_RUN=.*/DRY_RUN=0/' "$HOME/.config/photo-autobackup/config.env"
+mkdir -p "$SHARED/DCIM/Camera"
+echo "rehearse" > "$SHARED/DCIM/Camera/예행_사진.jpg"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+out=$(DRY_RUN=1 "$SKILL/scripts/photo-autobackup.sh" migrate --yes 2>&1)
+check "원본이 그대로 있다"        1 "$(ls "$SHARED/DCIM/Camera/예행_사진.jpg" 2>/dev/null | wc -l)"
+check "DRY-RUN 표시가 나온다"     1 "$(echo "$out" | grep -c 'DRY-RUN')"
+check "설정 파일은 여전히 0"      1 "$(grep -c '^DRY_RUN=0' "$HOME/.config/photo-autobackup/config.env")"
+rm -f "$SHARED/DCIM/Camera/예행_사진.jpg"
+
+echo "== 83. migrate 도 재시도 상한을 지킨다 =="
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "badmig" > "$SHARED/DCIM/Camera/실패반복.jpg"
+: > "$ROOT/copyto-hits"
+for i in 1 2 3 4 5 6 7 8; do
+  RCLONE_FAKE_FAIL=1 COPYTO_HITS="$ROOT/copyto-hits" \
+    "$SKILL/scripts/photo-autobackup.sh" migrate --yes >/dev/null 2>&1
+done
+att=$(awk -F'\t' '$1 ~ /실패반복/ {print $2}' "$HOME/.local/share/photo-autobackup/failures.tsv" | tail -n1)
+check "8회 돌려도 상한 5에서 멈춤" 5 "${att:-0}"
+rm -f "$SHARED/DCIM/Camera/실패반복.jpg"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
+echo "== 84. 이름이 바뀐 업로드도 장부 지름길을 탄다 =="
+rm -f "$CALLDIR"/* ; rm -rf "$ROOT/remote/수신녹취"
+mkdir -p "$ROOT/remote/수신녹취/$YM"
+echo "남의 파일" > "$ROOT/remote/수신녹취/$YM/수신 이름충돌 260819.m4a"
+echo "내 녹음" > "$CALLDIR/수신 이름충돌 260819.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "접미사 붙여 올라감"        1 "$(ls "$ROOT/remote/수신녹취/$YM/" | grep -c '수신 이름충돌 260819-')"
+out=$("$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+check "재스윕에서 건너뜀"         1 "$(echo "$out" | grep -c '업로드 0건')"
+rm -f "$CALLDIR"/*
+
+echo "== 85. 제자리를 찾은 전사의 옛 사본이 남지 않는다 =="
+rm -rf "$ROOT/remote/수신녹취" "$ROOT/remote/통화녹취_미분류"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+echo "전사만" > "$CALLDIR/수신 사본정리 260819.txt"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "먼저 미분류에 올라감"      1 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/수신 사본정리 260819.txt" 2>/dev/null | wc -l)"
+echo "audio" > "$CALLDIR/수신 사본정리 260819.m4a"
+"$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "제자리로 옮겨짐"           1 "$(ls "$ROOT/remote/수신녹취/$YM/수신 사본정리 260819.txt" 2>/dev/null | wc -l)"
+check "미분류의 옛 사본 제거됨"   0 "$(ls "$ROOT/remote/통화녹취_미분류/$YM/수신 사본정리 260819.txt" 2>/dev/null | wc -l)"
 rm -f "$CALLDIR"/*
 
 echo

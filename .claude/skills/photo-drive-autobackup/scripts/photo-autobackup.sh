@@ -13,8 +13,25 @@ fi
 
 set -uo pipefail
 
-VERSION="2.0.1"
+VERSION="2.1.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
+
+# ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
+# 환경변수로 준 값은 설정 파일보다 우선한다. 한 번만 다르게 돌려 보려는 것이
+# 설정 파일에 막히면, 예행연습(DRY_RUN=1)이 진짜 실행이 되어 사진이 지워진다.
+#
+# 반드시 기본값을 넣기 '전'에 붙잡아야 한다. 뒤에 붙잡으면 기본값 자체를
+# "사용자가 환경으로 준 값"으로 오해해 설정 파일을 통째로 무시하게 된다.
+OVERRIDABLE="DRY_RUN REQUIRE_WIFI RCLONE_REMOTE DRIVE_FOLDER VIDEO_DRIVE_FOLDER
+WATCH_DIRS MIGRATE_ROOTS LAYOUT MIGRATE_LAYOUT RETENTION_DAYS MAX_ATTEMPTS
+CALL_ENABLED CALL_DIRS EXTENSIONS VIDEO_EXTENSIONS CALL_EXTENSIONS
+TRANSCRIPT_EXTENSIONS CALL_DRIVE_IN CALL_DRIVE_OUT CALL_DRIVE_UNKNOWN
+MIN_AGE_SECONDS POLL_SECONDS RCLONE_EXTRA_ARGS"
+for _n in $OVERRIDABLE; do
+  eval "_v=\${$_n-}"
+  [ -n "$_v" ] && eval "_ENVSET_$_n=\$_v"
+done
+unset _n _v
 
 # ---------------------------------------------------------------- 설정 기본값
 RCLONE_REMOTE="gdrive"
@@ -23,7 +40,7 @@ WATCH_DIRS="$HOME/storage/dcim/Camera"
 EXTENSIONS="jpg jpeg png heic heif dng webp"
 # 동영상은 따로 다룬다. 사진과 섞이면 드라이브 폴더가 뒤죽박죽이 되고, 크기가 훨씬
 # 커서 진행 상황을 가늠하기도 어렵다.
-VIDEO_EXTENSIONS="mp4 mov m4v 3gp mkv avi webm"
+VIDEO_EXTENSIONS="mp4 mov m4v mkv avi webm"
 VIDEO_DRIVE_FOLDER="동영상"
 STATE_DIR="$HOME/.local/share/photo-autobackup"
 MIN_AGE_SECONDS=20
@@ -57,10 +74,17 @@ CALL_OUT_PATTERN="발신|보낸|outgoing|_out_|^out[-_]"
 CALL_LOG_WINDOW=90                 # 통화기록 대조 허용 오차(초)
 
 load_config() {
+  local _n _v
   if [ -f "$CONFIG_FILE" ]; then
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
   fi
+  # 설정 파일이 덮어썼더라도 환경에서 온 값을 되돌려 놓는다
+  for _n in $OVERRIDABLE; do
+    eval "_v=\${_ENVSET_$_n-}"
+    [ -n "$_v" ] && eval "$_n=\$_v"
+  done
+
   TRASH_DIR="${TRASH_DIR:-$STATE_DIR/trash}"
   LOG_FILE="${LOG_FILE:-$STATE_DIR/autobackup.log}"
   MANIFEST="$TRASH_DIR/manifest.tsv"
@@ -366,8 +390,11 @@ copy_file() {
   # 크기와 수정시각이 그대로면 내용도 그대로다. 여기서 끊어야 보관함이 커져도
   # 매 주기 비용이 늘지 않는다. 해시는 실제로 올릴 때만 계산한다.
   target_rel="$rdir/$(basename "$src")"
+  # 장부에는 이름 충돌로 접미사가 붙은 최종 이름이 들어간다. 이름이 아니라
+  # '어느 폴더로 갔는가'를 비교해야 그런 파일도 지름길을 탈 수 있다.
+  local seen_dir="${seen_rel%/*}"
   if [ -n "$seen_size" ] && [ "$seen_size" = "$size" ] && [ "$seen_mtime" = "$mtime" ] \
-     && [ "$seen_rel" = "$target_rel" ]; then
+     && [ "$seen_dir" = "$rdir" ]; then
     return 2
   fi
   # 목적지가 달라졌다면(예: 미분류로 갔던 전사에 짝 녹음이 생겨 제자리를 찾음)
@@ -378,7 +405,7 @@ copy_file() {
 
   # 내용이 같아도 '가야 할 곳'이 달라졌으면 다시 올려야 한다. 목적지를 안 보면
   # 미분류로 갔던 전사가 짝 녹음이 생겨도 영영 미분류에 남는다.
-  if [ "$seen" = "$lmd5" ] && [ "$seen_rel" = "$target_rel" ]; then
+  if [ "$seen" = "$lmd5" ] && [ "$seen_dir" = "$rdir" ]; then
     # 내용도 목적지도 그대로, mtime 만 바뀐 경우 — 장부만 갱신하고 넘어간다
     local t2="$LEDGER.tmp"
     awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$t2" 2>/dev/null || : > "$t2"
@@ -399,6 +426,16 @@ copy_file() {
 
   upload_and_verify "$src" "$rdir" "$conflict"; urc=$?
   [ "$urc" = "0" ] || return $urc
+
+  # 목적지가 바뀌었다면 옛 자리의 사본을 치운다. 놔두면 두 벌이 남아 편집할 때
+  # 서로 달라진다. 장부에 있다는 것은 내가 올린 것이라는 뜻이라 지워도 안전하다.
+  if [ -n "$seen_rel" ] && [ "$seen_rel" != "$UPLOADED_REL" ]; then
+    if rclone_run deletefile "$RCLONE_REMOTE:$seen_rel" >/dev/null 2>&1; then
+      log INFO "옛 자리의 사본을 치웠다: $seen_rel"
+    else
+      log WARN "옛 자리의 사본을 치우지 못했다(직접 확인 필요): $seen_rel"
+    fi
+  fi
 
   local tmp="$LEDGER.tmp"
   awk -F'\t' -v k="$src" '$1!=k' "$LEDGER" > "$tmp" 2>/dev/null || : > "$tmp"
@@ -554,11 +591,15 @@ cmd_migrate() {
   wifi_ok || { rm -f "$list"; die "Wi-Fi 연결을 기다리는 중이라 이관을 시작하지 않는다."; }
 
   have termux-wake-lock && termux-wake-lock
+  trap 'have termux-wake-unlock && termux-wake-unlock; log WARN "이관이 중단됐다. migrate 를 다시 실행하면 남은 것부터 이어서 한다."; exit 130' INT TERM
   log INFO "일괄 이관 시작 — ${count}건 / $(human "$bytes")"
   local i=0
   while IFS= read -r f; do
     i=$((i + 1))
     [ -f "$f" ] || continue
+    local mattempts
+    mattempts=$(attempts_of "$f"); mattempts=${mattempts:-0}
+    [ "$mattempts" -ge "$MAX_ATTEMPTS" ] && continue
     # 도중에 Wi-Fi 가 끊기면 멈춘다. 시작할 때 한 번만 확인하면, 요금을 지키려고
     # 켠 설정이 시작 순간만 지키고 남은 수십 GB 는 셀룰러로 나간다.
     if [ "$REQUIRE_WIFI" = "1" ] && [ $((i % 20)) = 0 ] && ! wifi_ok; then

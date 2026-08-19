@@ -107,7 +107,7 @@ tail -f ~/migrate.out
 | 방법 | 완료 신호 |
 |---|---|
 | 화면 | `일괄 이관 종료 — 성공 N건, 실패 M건` 뒤 프롬프트(`~ $`) 복귀 |
-| `photo-autobackup.sh status` | `대기 중 : 0건` |
+| `photo-autobackup.sh verify-empty` | `폰에 남은 사진이 없다` |
 | `pgrep -af photo-autobackup` | 아무것도 안 나옴 |
 
 termux-api 가 있으면 **끝날 때 폰 알림**이 뜬다. 몇 시간짜리 작업을 터미널만
