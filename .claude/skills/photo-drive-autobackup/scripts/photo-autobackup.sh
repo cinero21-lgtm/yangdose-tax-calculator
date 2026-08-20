@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.3.2"
+VERSION="2.4.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -512,6 +512,27 @@ collect_candidates() {
 
 # 폰 전체에서 '진짜 사진'만 골라낸다. 앱 캐시·썸네일·다운로드 임시파일은 건너뛴다 —
 # 이런 것까지 올리면 드라이브가 쓰레기로 차고, 지우면 앱이 깨진다.
+# 전사 파일이 녹음 폴더가 아닌 다른 데 저장되는 기종이 있다. 녹음 폴더만 보고
+# "없다"고 답하면 그 경우를 놓치므로, MIGRATE_ROOTS 전체를 한 번 훑는다.
+# probe 에서만 쓰는 조사용이다 — 업로드 대상 선정에는 관여하지 않는다.
+find_transcripts_anywhere() {
+  local root real args=() ext
+  [ -n "$TRANSCRIPT_EXTENSIONS" ] || return 0
+  for ext in $TRANSCRIPT_EXTENSIONS; do args+=(-iname "*.${ext}" -o); done
+  unset 'args[${#args[@]}-1]'
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    real=$(resolve_dir "$root"); [ -d "$real" ] || continue
+    find "$real" \
+      \( -name '.thumbnails' -o -name 'cache' -o -name 'Cache' -o -name '.cache' \
+         -o -path '*/Android/data' -o -path '*/Android/obb' -o -name '.trashed*' \) -prune -o \
+      -type f \( "${args[@]}" \) \
+      ! -name '.*' \
+      ! -path "$TRASH_DIR/*" ! -path "$STATE_DIR/*" \
+      -print 2>/dev/null
+  done < <(split_dirs "$MIGRATE_ROOTS")
+}
+
 discover_all() {
   local root real args=() ext
   for ext in $(all_extensions); do args+=(-iname "*.${ext}" -o); done
@@ -1342,11 +1363,26 @@ cmd_probe() {
   while IFS= read -r f; do
     is_transcript "$f" && { tn=$((tn + 1)); [ "$tn" -le 3 ] && printf '  %s\n' "$(basename "$f")"; }
   done < <(find_call_files 2>/dev/null)
-  if [ "$tn" = "0" ]; then
-    echo "  없음 — 앱이 전사를 파일로 저장하지 않거나, 앱 내부 저장소에만 둔다."
-    echo "  이 경우 녹취(음성)만 올리고 전사는 앱의 내보내기/공유 기능을 써야 한다."
+  if [ "$tn" -gt 0 ]; then
+    echo "  녹음 폴더 안에서 ${tn}건 발견 — 녹취와 짝지어 함께 올린다."
   else
-    echo "  총 ${tn}건 발견"
+    # 녹음 폴더만 보고 "없다"고 하면, 앱이 다른 폴더에 저장하는 경우를 놓친다.
+    # 실제로 그 모호함 때문에 한 번 어긋났다. 폰 전체를 한 번 더 훑어야
+    # "어디에도 없다"고 단정할 수 있다.
+    echo "  녹음 폴더 옆에는 없다. 폰 전체를 훑는다..."
+    local on=0 first=""
+    while IFS= read -r f; do
+      on=$((on + 1)); [ -n "$first" ] || first="$f"
+    done < <(find_transcripts_anywhere 2>/dev/null)
+    if [ "$on" -gt 0 ]; then
+      echo "  다른 폴더에서 ${on}건 발견:"
+      printf '    %s\n' "$first"
+      echo "  → 이 폴더를 CALL_DIRS 에 더하면 자동 업로드에 함께 실린다."
+    else
+      echo "  폰 어디에도 파일로는 없다. 앱이 전사를 앱 내부에만 두는 것이다."
+      echo "  → 정해진 방침: 녹취(음성)를 드라이브에 올리고 전사는 Gemini 에게 맡긴다."
+      echo "    (음성만 올라가면 되므로 이 항목이 0건이어도 문제가 아니다)"
+    fi
   fi
   echo
 

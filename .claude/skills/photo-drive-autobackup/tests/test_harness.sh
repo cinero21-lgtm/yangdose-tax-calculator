@@ -1156,6 +1156,36 @@ got=$( { TAPI_TIMEOUT=2 timeout 30 "$SKILL/scripts/photo-autobackup.sh" probe >/
 check "표준입력을 삼키지 않는다"       1 "$(echo "$got" | grep -c 'SENTINEL-입력-보존')"
 rm -f "$ROOT/bin/termux-call-log"
 
+echo "== 96. probe 의 전사 조사는 '폰 어디에도 없다'까지 단정한다 =="
+# 녹음 폴더만 보고 "없음"이라 하면, 앱이 다른 폴더에 저장하는 경우를 놓친다.
+# 실제로 그 모호함 때문에 사용자와 한 번 어긋났다.
+PCALL="$SHARED/Recordings/Call"
+rm -rf "$SHARED/Recordings" "$SHARED/전사보관"; mkdir -p "$PCALL"
+printf 'a' > "$PCALL/통화 01011112222_260820_101010.m4a"
+
+# (가) 폰 어디에도 전사가 없다 → 단정하고 Gemini 방침을 안내한다
+out=$(CALL_ENABLED=1 CALL_DIRS="$PCALL" "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "폰 전체를 훑었다고 말한다"   1 "$(echo "$out" | grep -c '폰 전체를 훑는다')"
+check "어디에도 없다고 단정한다"   1 "$(echo "$out" | grep -c '폰 어디에도 파일로는 없다')"
+check "Gemini 방침을 안내한다"     1 "$(echo "$out" | grep -c 'Gemini')"
+check "0건이 실패가 아님을 밝힌다" 1 "$(echo "$out" | grep -c '문제가 아니다')"
+
+# (나) 다른 폴더에 있으면 찾아내고 경로를 보여 준다 (녹음 폴더 밖)
+mkdir -p "$SHARED/전사보관"
+printf '전사 본문' > "$SHARED/전사보관/통화 01011112222_260820_101010.txt"
+out=$(CALL_ENABLED=1 CALL_DIRS="$PCALL" "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "다른 폴더의 전사를 찾아낸다" 1 "$(echo "$out" | grep -c '다른 폴더에서 1건 발견')"
+check "경로를 보여 준다"            1 "$(echo "$out" | grep -c '전사보관')"
+check "CALL_DIRS 로 흡수하라고 한다" 1 "$(echo "$out" | grep -c 'CALL_DIRS 에 더하면')"
+check "이때는 단정하지 않는다"       0 "$(echo "$out" | grep -c '폰 어디에도 파일로는 없다')"
+
+# (다) 녹음 폴더 옆에 있으면 폰 전체를 훑을 것도 없이 짝으로 처리한다
+mv "$SHARED/전사보관/통화 01011112222_260820_101010.txt" "$PCALL/"
+out=$(CALL_ENABLED=1 CALL_DIRS="$PCALL" "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "녹음 폴더 옆의 짝을 센다"    1 "$(echo "$out" | grep -c '녹음 폴더 안에서 1건 발견')"
+check "불필요하게 전체를 안 훑는다" 0 "$(echo "$out" | grep -c '폰 전체를 훑는다')"
+rm -rf "$SHARED/Recordings" "$SHARED/전사보관"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
