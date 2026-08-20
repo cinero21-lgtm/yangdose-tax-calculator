@@ -81,7 +81,36 @@ photo-autobackup.sh probe
 
 #### 실기기 확인 — Galaxy Z Fold 8 / One UI
 
-이 기종에서 **확정된 사실**이다.
+`probe --deep` 으로 세 경로를 끝까지 훑은 **최종 결론**이다. 같은 질문이 다시
+나오면 여기서부터 시작해라 — 처음부터 되풀이할 필요가 없다.
+
+| 경로 | 결과 |
+|---|---|
+| 일반 폴더의 전사 파일 | 없음 (확장자 무관 전수 조사) |
+| `Android/data` | 안드로이드가 목록을 차단 |
+| ContentProvider | **존재하지만 전부 권한 거부** |
+
+APK 매니페스트에서 실제 provider 이름까지 뽑아냈다.
+
+```
+com.sec.android.app.voicenote.data.VNAIProvider        ← 전사·AI 담당으로 보인다
+com.sec.android.app.voicenote.data.VNProvider
+com.sec.android.app.voicenote.data.CategoryDBProvider
+com.sec.android.app.voicenote.data.FinderProvider
+com.sec.android.app.voicenote.data.ManageTrashProvider
+com.sec.android.app.voicenote.CapsuleProvider
+```
+
+전부 `Error while accessing provider` 로 거부된다. 읽으려면
+`...VNAIProvider.READ_PERMISSION` 이 필요하고 그 권한은 **시스템 서명 앱에만**
+나간다. **루팅 없이는 여기까지가 끝이다.** 더 팔 기계 경로는 없다.
+
+이건 "확인 못 했다"가 아니라 **"확인했고 거부당했다"** 이다. 다시 조사하지 마라.
+
+남은 비루팅 경로는 앱 UI 뿐이다 — `⋮` 의 '텍스트 내보내기'로 사람이 저장하거나,
+접근성 자동화(Tasker+AutoInput)로 그 메뉴를 대신 누르는 것.
+
+#### 그 밖에 이 기종에서 확정된 것
 
 - 통화 녹음 앱은 전사·요약을 **한다.** 앱 화면에 통화마다 요약 한 줄이 붙는다
 - 그러나 그 결과를 공유 저장소에 **파일로 내보내지 않는다.** 폰 전체를 훑어도
