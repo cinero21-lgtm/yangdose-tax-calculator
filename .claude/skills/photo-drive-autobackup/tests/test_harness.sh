@@ -1417,6 +1417,72 @@ check "조회를 하지도 않았다"        0 "$([ -s "$CLOG" ] && echo 1 || ec
 rm -rf "$ROOT/sysbin" "$SHARED/Recordings"; rm -f "$CLOG"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
+echo "== 109. 모르는 응답을 '읽힌다'로 단정하지 않는다 =="
+# 실기기에서 'app_process: inaccessible or not found' 가 '읽힌다!' 로 찍혔다.
+# 실패 낱말 목록으로 거르면 처음 보는 실패 문구가 전부 성공이 된다. 하마터면
+# 전사를 꺼낼 수 있다고 보고할 뻔했다. 성공의 모습을 아는 경우에만 성공이다.
+rm -rf "$SHARED/Recordings" "$ROOT/sysbin"; mkdir -p "$SHARED/Recordings/Call" "$ROOT/sysbin"
+printf 'a' > "$SHARED/Recordings/Call/통화 01011112222_260820_101010.m4a"
+mkcontent() {   # $1 = 종료코드, 나머지 = 출력할 문구
+  local rc="$1"; shift
+  { printf '#!/bin/bash
+'
+    printf 'printf "%%s\\n" "$PATH" >> "$PATHLOG"
+'
+    printf 'echo %s
+' "$(printf '%q' "$*")"
+    printf 'exit %s
+' "$rc"; } > "$ROOT/sysbin/content"
+  chmod 755 "$ROOT/sysbin/content"
+}
+PLOG="$ROOT/path109.log"
+RUNP=(env ANDROID_BIN_DIR="$ROOT/sysbin" PATHLOG="$PLOG" CALL_ENABLED=1 \
+      CALL_DIRS="$SHARED/Recordings/Call" "$SKILL/scripts/photo-autobackup.sh" probe --deep)
+
+: > "$PLOG"; mkcontent 0 "/system/bin/content[3]: app_process: inaccessible or not found"
+out=$("${RUNP[@]}" 2>&1)
+check "모르는 응답은 읽힌다가 아니다"  0 "$(echo "$out" | grep -c '읽힌다!')"
+check "판정 불가로 표시한다"           1 "$(echo "$out" | grep -q '판정 불가' && echo 1 || echo 0)"
+check "미확인으로 결론낸다"            1 "$(echo "$out" | grep -c '실패가 아니라 미확인이다')"
+
+: > "$PLOG"; mkcontent 0 "Row: 0 _id=1, text=전사본문"
+out=$("${RUNP[@]}" 2>&1)
+check "Row: 로 시작하면 성공"          1 "$(echo "$out" | grep -q '읽힌다!' && echo 1 || echo 0)"
+check "성공을 결론에 반영한다"         1 "$(echo "$out" | grep -c '여기서 전사를 끌어올 수 있다')"
+
+: > "$PLOG"; mkcontent 1 "Error: java.lang.SecurityException"
+out=$("${RUNP[@]}" 2>&1)
+check "종료코드가 0이 아니면 실패"     1 "$(echo "$out" | grep -q '실패(코드 1)' && echo 1 || echo 0)"
+check "실패를 읽힌다로 안 쓴다"        0 "$(echo "$out" | grep -c '읽힌다!')"
+
+echo "== 110. 안드로이드 도구를 부를 때 PATH 에 그 폴더를 넣는다 =="
+# /system/bin/content 는 쉘 스크립트라 내부에서 app_process 를 PATH 로 찾는다.
+# 절대 경로로만 부르면 그 안쪽이 죽는다 — 실기기 실패의 진짜 원인이었다.
+check "PATH 에 도구 폴더가 들어간다"   1 "$(head -1 "$PLOG" | grep -q "^$ROOT/sysbin:" && echo 1 || echo 0)"
+
+echo "== 111. C-2 는 UTF-16 로 저장된 authority 도 읽는다 =="
+# AXML 문자열 풀은 UTF-16LE 인 경우가 흔하다. 그러면 'com.sec...' 가
+# 'c o m ...' 라 ASCII grep 에 안 잡힌다. 실기기에서 앱 5개가 전부 빈손이었다.
+UDIR="$ROOT/utf16apk"; rm -rf "$UDIR"; mkdir -p "$UDIR"
+python3 -c "import sys; sys.stdout.buffer.write('com.sec.android.app.voicenote.u16prov'.encode('utf-16-le'))" \
+  > "$UDIR/AndroidManifest.xml"
+( cd "$UDIR" && zip -q "$ROOT/u16.apk" AndroidManifest.xml )
+cat > "$ROOT/sysbin/pm" <<'PMS'
+#!/bin/bash
+case "$1" in
+  list) exit 0 ;;
+  path) case "$2" in com.sec.android.app.voicenote) echo "package:$FAKE_APK";; *) exit 1;; esac ;;
+esac
+PMS
+chmod 755 "$ROOT/sysbin/pm"
+: > "$PLOG"; mkcontent 0 "Row: 0 _id=1, text=UTF16전사"
+out=$(env ANDROID_BIN_DIR="$ROOT/sysbin" PATHLOG="$PLOG" FAKE_APK="$ROOT/u16.apk" \
+      CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call" \
+      "$SKILL/scripts/photo-autobackup.sh" probe --deep 2>&1)
+check "UTF-16 authority 를 찾아낸다"   1 "$(echo "$out" | grep -c 'provider: com.sec.android.app.voicenote.u16prov')"
+rm -rf "$ROOT/sysbin" "$UDIR" "$SHARED/Recordings"; rm -f "$ROOT/u16.apk" "$PLOG"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

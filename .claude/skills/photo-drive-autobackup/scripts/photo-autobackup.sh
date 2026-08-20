@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.8.0"
+VERSION="2.9.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -125,6 +125,12 @@ android_tool() {
   [ -x "$ANDROID_BIN_DIR/$1" ] && { printf '%s/%s' "$ANDROID_BIN_DIR" "$1"; return 0; }
   return 1
 }
+
+# 찾는 것과 '실행되게 하는 것'은 다르다. /system/bin/content 는 쉘 스크립트이고
+# 마지막에 app_process 를 PATH 에서 찾아 exec 한다. 절대 경로로 부르기만 하면
+# 그 안쪽에서 app_process 를 못 찾아 'inaccessible or not found' 로 죽는다.
+# 실기기에서 정확히 그랬다. 부를 때 PATH 에 ANDROID_BIN_DIR 을 넣어 준다.
+run_android() { PATH="$ANDROID_BIN_DIR:$PATH" "$@"; }
 
 # termux-api 명령은 동반 앱(Termux:API)이 없거나 권한 대화상자에 답한 적이 없으면
 # 응답 없이 영영 매달린다. 더 나쁜 건 그동안 터미널에 입력한 것이 전부 그 명령의
@@ -1463,14 +1469,25 @@ try_authority() {
     printf '      → content 를 찾지 못했다 (PATH·%s 둘 다 없음)\n' "$ANDROID_BIN_DIR"
     return 2
   fi
-  out=$("$bin" query --uri "content://$auth/" 2>&1 | head -3)
+  local rc
+  out=$(run_android "$bin" query --uri "content://$auth/" 2>&1 | head -3); rc=$?
+  # 실패 낱말 목록으로 걸러내면, 처음 보는 실패 문구가 전부 '성공'이 된다.
+  # 실기기에서 'app_process: inaccessible or not found' 가 '읽힌다!' 로 찍혔다 —
+  # 하마터면 전사를 꺼낼 수 있다고 보고할 뻔했다. 그래서 뒤집는다:
+  # 성공의 모습을 아는 경우에만 성공이라 부르고, 나머지는 '판정 불가' 로 둔다.
+  if [ "$rc" != "0" ]; then
+    printf '      → 실패(코드 %s): %s\n' "$rc" "$(printf '%s' "$out" | head -1)"; return 1
+  fi
   case "$out" in
-    *Exception*|*error*|*Error*|*denied*)
-      printf '      → 막혔다: %s\n' "$(printf '%s' "$out" | head -1)"; return 1 ;;
-    '')
-      printf '      → 조회는 됐으나 내용이 비었다\n'; return 1 ;;
-    *)
+    Row:*)
       printf '      → 읽힌다! %s\n' "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"; return 0 ;;
+    *'No result found'*|'')
+      printf '      → 조회는 됐으나 내용이 비었다\n'; return 1 ;;
+    *Exception*|*denied*|*Denial*)
+      printf '      → 막혔다: %s\n' "$(printf '%s' "$out" | head -1)"; return 1 ;;
+    *)
+      printf '      → 판정 불가(성공 형태가 아니다): %s\n' "$(printf '%s' "$out" | head -1)"
+      return 2 ;;
   esac
 }
 
@@ -1546,13 +1563,13 @@ com.android.soundrecorder"
   # pm list 가 되는 기기라면 후보 밖의 앱도 잡을 수 있으니 보조로 쓴다.
   if [ -n "$pmbin" ]; then
     CANDS="$CANDS
-$("$pmbin" list packages 2>/dev/null | sed 's/^package://' \
+$(run_android "$pmbin" list packages 2>/dev/null | sed 's/^package://' \
     | grep -iE 'voicenote|voicerecorder|recorder|dialer|telephonyui|callrecord')"
   fi
   local apk n_auth
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
-    [ -n "$pmbin" ] && ! "$pmbin" path "$cand" >/dev/null 2>&1 && continue
+    [ -n "$pmbin" ] && ! run_android "$pmbin" path "$cand" >/dev/null 2>&1 && continue
     found_pkg=$((found_pkg + 1))
     printf '  앱: %s (설치됨)\n' "$cand"
 
@@ -1563,7 +1580,7 @@ $("$pmbin" list packages 2>/dev/null | sed 's/^package://' \
         [ -n "$auth" ] || continue
         n_auth=$((n_auth + 1))
         try_authority "$auth"; case $? in 0) found_auth=$((found_auth + 1)) ;; 2) no_content=1 ;; esac
-      done < <("$dsbin" package "$cand" 2>/dev/null \
+      done < <(run_android "$dsbin" package "$cand" 2>/dev/null \
                  | grep -oE 'authority=[^ ]+' | cut -d= -f2 | tr ';' '\n' | sort -u | head -5)
     fi
     [ "$n_auth" -gt 0 ] && continue
@@ -1577,7 +1594,7 @@ $("$pmbin" list packages 2>/dev/null | sed 's/^package://' \
     #      그건 APK 안에 있고 시스템 APK 는 누구나 읽는다. 이진 XML 이지만
     #      문자열 풀은 평문이라 authority 문자열이 그대로 잡힌다.
     apk=""
-    [ -n "$pmbin" ] && apk=$("$pmbin" path "$cand" 2>/dev/null | sed 's/^package://' | head -1)
+    [ -n "$pmbin" ] && apk=$(run_android "$pmbin" path "$cand" 2>/dev/null | sed 's/^package://' | head -1)
     if [ -z "$apk" ] || [ ! -r "$apk" ]; then
       echo "    C-2 APK: 경로를 못 얻거나 읽을 수 없다"
     elif ! have unzip; then
@@ -1588,10 +1605,16 @@ $("$pmbin" list packages 2>/dev/null | sed 's/^package://' \
       # 'com.sec...voicenote.recordings' 처럼 그 낱말이 없는 경우가 흔하다.
       # 패키지 이름으로 시작하는 점 표기 문자열을 모두 후보로 본다. 'provider'
       # 가 든 것을 앞세우되, 나머지도 뒤이어 찔러 본다 — 조회는 값싸다.
-      local names
-      names=$(unzip -p "$apk" AndroidManifest.xml 2>/dev/null \
+      # AXML 문자열 풀은 UTF-16LE 로 저장되는 경우가 흔하다. 그러면 'com.sec...'
+      # 가 파일 안에서 'c\0o\0m\0...' 이라 ASCII grep 에 안 잡힌다. 실기기에서
+      # 앱 5개가 전부 똑같이 빈손이었던 것이 그 방증이다. 널을 뺀 갈래도 훑는다.
+      local names mtmp
+      mtmp=$(mktemp)
+      unzip -p "$apk" AndroidManifest.xml 2>/dev/null > "$mtmp"
+      names=$({ cat "$mtmp"; printf '\n'; tr -d '\000' < "$mtmp"; } \
                 | tr -c 'a-zA-Z0-9._' '\n' \
                 | grep -aE "^${cand}[a-zA-Z0-9_.]+$" | sort -u)
+      rm -f "$mtmp"
       if [ -z "$names" ]; then
         echo "    C-2 APK: 매니페스트에서 패키지 이름으로 시작하는 문자열을 못 찾았다"
       else
@@ -1619,8 +1642,11 @@ $("$pmbin" list packages 2>/dev/null | sed 's/^package://' \
 
   # 한 번도 조회를 못 해 봤으면 '실패'가 아니다. 해 보지도 않고 안 된다고
   # 결론짓는 것이 이 조사에서 세 번 반복된 결함이다.
-  if [ "$no_content" = "1" ]; then
-    echo "  ※ content 명령을 못 찾아 조회를 한 번도 실행하지 못했다 — 실패가 아니라 미확인이다."
+  if [ "$found_auth" -gt 0 ]; then
+    echo "  → provider 를 읽어냈다. 여기서 전사를 끌어올 수 있다."
+  elif [ "$no_content" = "1" ]; then
+    echo "  ※ 조회 결과를 판정하지 못했다 — 실패가 아니라 미확인이다."
+    echo "    content 를 못 찾았거나, 실행은 됐는데 성공/실패로 못 가를 응답이 왔다."
     echo "    확인:  ls -l $ANDROID_BIN_DIR/content   /  다른 위치면  ANDROID_BIN_DIR=<경로> 로 지정"
   elif [ "$found_pkg" = "0" ]; then
     echo "  후보 패키지가 하나도 설치돼 있지 않다 (또는 pm 이 조회조차 막는다)."
