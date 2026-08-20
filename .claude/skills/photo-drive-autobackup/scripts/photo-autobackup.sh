@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.9.0"
+VERSION="2.10.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -93,6 +93,7 @@ load_config() {
   LOG_FILE="${LOG_FILE:-$STATE_DIR/autobackup.log}"
   MANIFEST="$TRASH_DIR/manifest.tsv"
   FAILURES="$STATE_DIR/failures.tsv"
+  WATCH_PID_FILE="$STATE_DIR/watch.pid"
   LEDGER="$STATE_DIR/uploaded.tsv"
   mkdir -p "$STATE_DIR" "$TRASH_DIR" "$(dirname "$LOG_FILE")"
   [ -f "$MANIFEST" ] || printf 'moved_at\toriginal_path\ttrash_path\tremote_path\tmd5\n' > "$MANIFEST"
@@ -793,7 +794,12 @@ cmd_verify_empty() {
 # --------------------------------------------------------------------- 감시 모드
 cmd_watch() {
   have termux-wake-lock && tapi termux-wake-lock
-  trap 'have termux-wake-unlock && tapi termux-wake-unlock; exit 0' INT TERM
+  # 자기 PID 를 남겨 status 가 '돌고 있는지'를 답할 수 있게 한다. 이게 없으면
+  # 사용자가 "왜 안 올라가지?" 할 때 감시가 죽은 것인지 알 방법이 없다 —
+  # 실기기에서 올릴 차례 4건이 대기만 하고 있었는데 그 사실을 아무도 몰랐다.
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$$" > "$WATCH_PID_FILE"
+  trap 'rm -f "$WATCH_PID_FILE"; have termux-wake-unlock && tapi termux-wake-unlock; exit 0' INT TERM
   log INFO "감시 시작 (v$VERSION, 주기 ${POLL_SECONDS}s, 대상: $WATCH_DIRS)"
   while :; do
     cmd_once
@@ -1429,16 +1435,33 @@ cmd_probe() {
   echo
 
   echo "[5] 통화기록 API (파일명으로 판정 안 될 때 쓰는 수단)"
-  if have termux-call-log; then
-    if tapi termux-call-log -l 1 >/dev/null 2>&1; then
-      echo "  [OK] 사용 가능 — 파일명에 수신/발신이 없어도 시각 대조로 판정한다"
-    else
-      echo "  [실패] 명령은 있으나 권한이 없다."
-      echo "         설정 > 애플리케이션 > Termux:API > 권한 > 통화기록 허용"
-    fi
-  else
+  # termux-api(명령어 꾸러미)와 Termux:API(안드로이드 앱, 실제 권한 보유)는 별개다.
+  # 명령어 존재만 보고 나머지를 전부 '권한 없음'으로 몰면, 앱이 안 깔린 사람이
+  # 있지도 않은 설정 메뉴를 찾아 헤맨다 — 실기기에서 정확히 그랬다.
+  if ! have termux-call-log; then
     echo "  [없음] pkg install termux-api"
     echo "         없으면 파일명으로 판정 못 한 녹취는 전부 '$CALL_DRIVE_UNKNOWN' 로 간다"
+  elif tapi termux-call-log -l 1 >/dev/null 2>&1; then
+    echo "  [OK] 사용 가능 — 파일명에 수신/발신이 없어도 시각 대조로 판정한다"
+  else
+    local pmb apkstate=""
+    if pmb=$(android_tool pm); then
+      run_android "$pmb" path com.termux.api >/dev/null 2>&1 && apkstate=yes || apkstate=no
+    fi
+    case "$apkstate" in
+      no)
+        echo "  [없음] Termux:API '앱' 이 안 깔렸다 (명령어 꾸러미만 있다)."
+        echo "         F-Droid 에서 Termux:API 설치 → 앱을 한 번 실행"
+        echo "         ※ Termux 와 같은 출처(F-Droid)여야 한다. 스토어 판을 섞으면"
+        echo "           서명이 달라 조용히 실패한다" ;;
+      yes)
+        echo "  [실패] 앱은 있으나 통화기록 권한이 없다."
+        echo "         termux-call-log -l 1 을 직접 실행해 권한 대화상자를 띄우고 '허용'"
+        echo "         (요청한 적 없는 권한은 설정 메뉴에 항목이 아예 안 생긴다)" ;;
+      *)
+        echo "  [실패] 호출이 실패했다. pm 을 못 찾아 앱 설치 여부는 확인하지 못했다."
+        echo "         termux-call-log -l 1 을 직접 실행해 무엇이 나오는지 봐라" ;;
+    esac
   fi
   echo
 
@@ -1771,6 +1794,15 @@ cmd_doctor() {
     else
       echo "  [실패] 구글드라이브 접속 불가 — 토큰 만료 여부 확인 (rclone config reconnect $RCLONE_REMOTE:)"; ok=0
     fi
+    # rclone 공용 client_id 는 2026년 중 폐지된다. 그날이 오면 사진·동영상·통화녹취
+    # 백업이 통째로 인증 실패로 멈춘다(원본은 검증 실패 시 안 지우므로 유실은 아니다).
+    # 매 작업마다 NOTICE 가 찍히지만 로그 속에 묻혀 아무도 안 본다. 여기서 말해 준다.
+    # 지금은 동작하므로 실패가 아니라 '경고' 다 — ok 를 0 으로 만들지 않는다.
+    if ! rclone config show "$RCLONE_REMOTE" 2>/dev/null | grep -qE '^client_id[[:space:]]*=[[:space:]]*[^[:space:]]'; then
+      echo "  [경고] 공용 client_id 를 쓰고 있다 — 2026년 중 작동이 중단된다."
+      echo "         업로드가 느린 원인이기도 하다(전 세계가 나눠 쓰는 할당량)."
+      echo "         자체 client_id: https://rclone.org/drive/#making-your-own-client-id"
+    fi
   else
     echo "  [실패] rclone 리모트 '$RCLONE_REMOTE' 없음 — references/android-setup.md 참고"; ok=0
   fi
@@ -1862,6 +1894,19 @@ cmd_status() {
     if past_hold "$f"; then ready=$((ready + 1)); else held=$((held + 1)); fi
   done < "$tmpl"
   rm -f "$tmpl"
+  # 이 스킬의 존재 이유가 '자동으로 도는 것'인데, 켜졌는지 확인할 방법이 없었다.
+  # pidfile 이 있다고 살아 있다고 하면 안 된다 — 강제 종료·재부팅 뒤 남은 파일을
+  # 생존으로 오해한다. kill -0 으로 실제로 확인한다.
+  local wpid
+  if [ -f "$WATCH_PID_FILE" ] && wpid=$(cat "$WATCH_PID_FILE" 2>/dev/null) && [ -n "$wpid" ]; then
+    if kill -0 "$wpid" 2>/dev/null; then
+      echo "감시 데몬       : 돌고 있음 (PID $wpid)"
+    else
+      echo "감시 데몬       : 멈춤 (비정상 종료 흔적) — photo-autobackup.sh watch 로 다시 시작해라"
+    fi
+  else
+    echo "감시 데몬       : 멈춤 — photo-autobackup.sh watch 로 시작한다"
+  fi
   echo "리모트          : $RCLONE_REMOTE:$DRIVE_FOLDER"
   echo "감시 폴더       : $WATCH_DIRS"
   echo "감시 대기       : ${pending}건 (올릴 차례 ${ready} / 유예 중 ${held})"

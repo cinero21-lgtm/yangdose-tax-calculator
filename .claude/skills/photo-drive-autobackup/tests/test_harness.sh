@@ -1483,6 +1483,83 @@ check "UTF-16 authority 를 찾아낸다"   1 "$(echo "$out" | grep -c 'provider
 rm -rf "$ROOT/sysbin" "$UDIR" "$SHARED/Recordings"; rm -f "$ROOT/u16.apk" "$PLOG"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
+echo "== 112. status 가 감시 데몬 생사를 '확인해서' 말한다 =="
+# 이 스킬의 존재 이유가 '자동으로 도는 것'인데 켜졌는지 확인할 방법이 없었다.
+# 실기기에서 올릴 차례 4건이 대기만 하고 있었는데 아무도 그 사실을 몰랐다.
+PIDF="$HOME/.local/share/photo-autobackup/watch.pid"
+rm -f "$PIDF"
+out=$("$SKILL/scripts/photo-autobackup.sh" status 2>&1)
+check "pidfile 없으면 멈춤"        1 "$(echo "$out" | grep -c '감시 데몬       : 멈춤 — ')"
+
+# 죽은 PID 가 든 pidfile — 강제 종료·재부팅 뒤에 흔히 남는다.
+# 이걸 '돌고 있음'으로 읽으면 확인 없이 단정하는 것이다(이 작업에서 네 번 나온 부류).
+mkdir -p "$(dirname "$PIDF")"
+sh -c 'echo $$' > "$PIDF"          # 즉시 끝나는 프로세스의 PID → 이미 죽었다
+out=$("$SKILL/scripts/photo-autobackup.sh" status 2>&1)
+check "죽은 PID 를 살았다고 안 한다" 0 "$(echo "$out" | grep -c '돌고 있음')"
+check "비정상 종료 흔적이라 말한다"  1 "$(echo "$out" | grep -c '비정상 종료 흔적')"
+
+# 살아 있는 PID — sleep 을 띄워 두고 그 PID 를 쓴다
+sleep 30 & LIVE=$!
+echo "$LIVE" > "$PIDF"
+out=$("$SKILL/scripts/photo-autobackup.sh" status 2>&1)
+check "살아 있으면 돌고 있음"      1 "$(echo "$out" | grep -c "돌고 있음 (PID $LIVE)")"
+kill "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null
+rm -f "$PIDF"
+
+echo "== 113. doctor 가 공용 client_id 를 경고한다 (실패로는 안 만든다) =="
+# 2026년 중 폐지되면 백업이 통째로 멈춘다. NOTICE 는 로그에 묻혀 아무도 안 본다.
+cat > "$ROOT/bin/rclone" <<'RC2'
+#!/usr/bin/env bash
+case "$1" in
+  version) echo "rclone v1.0-fake" ;;
+  listremotes) echo "gdrive:" ;;
+  lsd) exit 0 ;;
+  config) [ "$2" = "show" ] && { [ "${FAKE_CLIENT_ID:-}" = "1" ] && echo "client_id = 12345.apps.googleusercontent.com"; echo "type = drive"; } ;;
+  *) exit 0 ;;
+esac
+RC2
+chmod 755 "$ROOT/bin/rclone"
+out=$("$SKILL/scripts/photo-autobackup.sh" doctor 2>&1); drc=$?
+check "공용이면 경고한다"          1 "$(echo "$out" | grep -c '공용 client_id 를 쓰고 있다')"
+check "느린 이유도 알려준다"       1 "$(echo "$out" | grep -c '전 세계가 나눠 쓰는 할당량')"
+check "경고여도 doctor 는 통과"    0 "$drc"
+out=$(FAKE_CLIENT_ID=1 "$SKILL/scripts/photo-autobackup.sh" doctor 2>&1)
+check "자체 키면 경고 안 한다"     0 "$(echo "$out" | grep -c '공용 client_id')"
+
+echo "== 114. probe [5] 가 '앱 없음'을 '권한 없음'이라 하지 않는다 =="
+# 실기기에서 이 오진 때문에 사용자가 존재하지도 않는 설정 메뉴를 찾아 헤맸다.
+# termux-api(명령어)와 Termux:API(앱)는 별개다.
+rm -rf "$ROOT/sysbin"; mkdir -p "$ROOT/sysbin"
+cat > "$ROOT/bin/termux-call-log" <<'TCL'
+#!/usr/bin/env bash
+exit 1                                   # 명령은 있는데 호출은 실패한다
+TCL
+chmod 755 "$ROOT/bin/termux-call-log"
+cat > "$ROOT/sysbin/pm" <<'PMS'
+#!/bin/bash
+case "$1" in
+  path) [ "${FAKE_APP:-no}" = "yes" ] && { echo "package:/x.apk"; exit 0; }; exit 1 ;;
+  *) exit 0 ;;
+esac
+PMS
+chmod 755 "$ROOT/sysbin/pm"
+RUN5=(env ANDROID_BIN_DIR="$ROOT/sysbin" CALL_ENABLED=1 "$SKILL/scripts/photo-autobackup.sh" probe)
+
+out=$(FAKE_APP=no "${RUN5[@]}" 2>&1)
+check "앱이 없으면 그렇게 말한다"   1 "$(echo "$out" | grep -c "Termux:API '앱' 이 안 깔렸다")"
+check "권한 탓으로 몰지 않는다"     0 "$(echo "$out" | grep -c '통화기록 권한이 없다')"
+check "같은 출처여야 함을 알린다"   1 "$(echo "$out" | grep -c '스토어 판을 섞으면')"
+
+out=$(FAKE_APP=yes "${RUN5[@]}" 2>&1)
+check "앱이 있으면 권한 문제로 본다" 1 "$(echo "$out" | grep -c '앱은 있으나 통화기록 권한이 없다')"
+check "대화상자 띄우는 법을 알린다"  1 "$(echo "$out" | grep -c 'termux-call-log -l 1 을 직접 실행')"
+
+# pm 을 못 찾으면 앱 유무를 단정하면 안 된다
+out=$(env ANDROID_BIN_DIR="$ROOT/nonexistent" CALL_ENABLED=1       "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "pm 없으면 단정하지 않는다"   1 "$(echo "$out" | grep -c '앱 설치 여부는 확인하지 못했다')"
+rm -f "$ROOT/bin/termux-call-log" "$ROOT/bin/rclone"; rm -rf "$ROOT/sysbin"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
