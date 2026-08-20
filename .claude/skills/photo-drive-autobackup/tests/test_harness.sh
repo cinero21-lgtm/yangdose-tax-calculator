@@ -1309,6 +1309,81 @@ rm -f "$ROOT/bin/pm" "$ROOT/bin/dumpsys" "$ROOT/bin/content" "$CLOG"
 rm -rf "$SHARED/Recordings" "$SHARED/Android"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
+echo "== 104. dumpsys 가 막혀도 APK 매니페스트에서 authority 를 캔다 =="
+# 실기기에서 [C] 가 여기서 멈췄다: "앱은 있으나 provider 를 못 읽었다(dumpsys 가 막혔다)".
+# dumpsys 는 한 가지 경로일 뿐이고 원본은 APK 안의 AndroidManifest.xml 이다.
+rm -rf "$SHARED/Recordings"; mkdir -p "$SHARED/Recordings/Call"
+printf 'a' > "$SHARED/Recordings/Call/통화 01011112222_260820_101010.m4a"
+APKDIR="$ROOT/fakeapk"; mkdir -p "$APKDIR"
+# C-3 의 고정 후보 목록에 '없는' 이름이어야 한다. 목록에 있는 이름을 쓰면
+# C-2 를 지워도 C-3 가 같은 답을 내서 이 시험이 아무것도 증명하지 못한다.
+printf 'junk com.sec.android.app.voicenote.customprov junk\n' > "$APKDIR/AndroidManifest.xml"
+( cd "$APKDIR" && zip -q "$ROOT/voicenote.apk" AndroidManifest.xml )
+cat > "$ROOT/bin/pm" <<'PMSTUB'
+#!/bin/bash
+case "$1" in
+  list) exit 0 ;;
+  path) case "$2" in com.sec.android.app.voicenote) echo "package:$FAKE_APK";; *) exit 1;; esac ;;
+esac
+PMSTUB
+cat > "$ROOT/bin/dumpsys" <<'DSTUB'
+#!/bin/bash
+exit 0                                   # 막혔다 — authority 를 하나도 안 준다
+DSTUB
+cat > "$ROOT/bin/content" <<'CSTUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$CONTENT_LOG"
+case "$*" in
+  *voicenote.customprov*) echo "Row: 0 _id=1, text=전사본문" ;;
+  *voicenote.provider*) echo "Row: 0 _id=1, text=전사본문" ;;
+  *) echo "Error: java.lang.SecurityException: Permission Denial" ;;
+esac
+CSTUB
+chmod 755 "$ROOT/bin/pm" "$ROOT/bin/dumpsys" "$ROOT/bin/content"
+CLOG="$ROOT/content104.args"; : > "$CLOG"
+RUN=(env FAKE_APK="$ROOT/voicenote.apk" CONTENT_LOG="$CLOG" CALL_ENABLED=1      CALL_DIRS="$SHARED/Recordings/Call" "$SKILL/scripts/photo-autobackup.sh" probe --deep)
+out=$("${RUN[@]}" 2>&1)
+check "dumpsys 실패를 밝힌다"       1 "$(echo "$out" | grep -c 'C-1 dumpsys: provider 를 못 얻었다')"
+check "APK 에서 authority 를 캔다"  1 "$(echo "$out" | grep -c 'provider: com.sec.android.app.voicenote.customprov')"
+check "실제로 조회한다"             1 "$(grep -c 'content://com.sec.android.app.voicenote.customprov/' "$CLOG")"
+check "C-2 로 끝나 C-3 는 안 간다"  0 "$(echo "$out" | grep -c 'C-3 알려진 authority')"
+check "읽혔음을 알린다"             1 "$(echo "$out" | grep -c '읽힌다!')"
+check "내용을 보여 준다"            1 "$(echo "$out" | grep -c '전사본문')"
+check "전부 실패로 결론내지 않는다" 0 "$(echo "$out" | grep -c 'C-1·C-2·C-3 전부 실패')"
+
+echo "== 105. unzip 이 없으면 조용히 넘어가지 않고 이유를 말한다 =="
+# 조용히 건너뛰면 또 '못 봤다'로 끝나 사용자가 원인을 알 수 없다.
+cat > "$ROOT/bin/unzip" <<'UZ'
+#!/bin/bash
+exit 127
+UZ
+chmod 755 "$ROOT/bin/unzip"
+# have() 가 못 찾게 하려면 PATH 에서 진짜 unzip 도 가려야 한다 — 스텁이 앞에 온다.
+out=$(env FAKE_APK="$ROOT/voicenote.apk" CONTENT_LOG="$CLOG" CALL_ENABLED=1       CALL_DIRS="$SHARED/Recordings/Call" PATH="$ROOT/bin:$PATH"       "$SKILL/scripts/photo-autobackup.sh" probe --deep 2>&1)
+check "매니페스트를 못 열면 밝힌다" 1 "$(echo "$out" | grep -cE 'C-2 APK: (unzip 이 없어|매니페스트에서)')"
+rm -f "$ROOT/bin/unzip"
+
+echo "== 106. 전부 막히면 알려진 authority 를 직접 찔러 본다 =="
+# 이름을 몰라도 후보는 몇 개뿐이다. 쳐 보면 열렸는지 막혔는지 답이 나온다.
+cat > "$ROOT/bin/pm" <<'PMSTUB'
+#!/bin/bash
+case "$1" in
+  list) exit 0 ;;
+  path) exit 1 ;;                        # APK 경로조차 안 준다
+esac
+PMSTUB
+chmod 755 "$ROOT/bin/pm"
+: > "$CLOG"
+out=$(env CONTENT_LOG="$CLOG" CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" probe --deep 2>&1)
+check "C-3 로 넘어간다"           1 "$(echo "$out" | grep -c 'C-3 알려진 authority')"
+check "후보를 실제로 조회한다"     1 "$(grep -c 'com.samsung.android.callrecording.provider' "$CLOG")"
+# 후보 4개 중 열리는 것은 하나뿐이므로 '막혔다'는 여러 번 나온다. 있느냐만 본다.
+check "막힌 것은 막혔다고 말한다"  1 "$(echo "$out" | grep -q '막혔다: .*SecurityException' && echo 1 || echo 0)"
+check "열린 것은 읽힌다고 말한다"  1 "$(echo "$out" | grep -c '읽힌다!')"
+rm -f "$ROOT/bin/pm" "$ROOT/bin/dumpsys" "$ROOT/bin/content" "$CLOG" "$ROOT/voicenote.apk"
+rm -rf "$APKDIR" "$SHARED/Recordings"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

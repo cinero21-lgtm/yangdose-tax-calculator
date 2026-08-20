@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.6.0"
+VERSION="2.7.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -1438,6 +1438,24 @@ cmd_probe() {
 # 앱이 전사를 앱 내부에만 두는 것처럼 보일 때, 정말 손댈 수 없는지 끝까지 확인한다.
 # "없다"고 결론 내리기 전에 무엇을 어디까지 봤는지 남기는 것이 목적이다 —
 # 못 찾아도 다음 판단의 근거가 된다.
+# authority 하나를 실제로 조회해 본다. 안내만 하고 끝내면 아무것도 확정되지 않는다 —
+# 쳐 봐야 '열려 있다'인지 'SecurityException'인지 답이 나온다.
+# 읽는 데 성공했을 때만 0 을 돌려준다.
+try_authority() {
+  local auth="$1" out
+  printf '    provider: %s\n' "$auth"
+  have content || { printf '      → content 명령이 없다\n'; return 1; }
+  out=$(content query --uri "content://$auth/" 2>&1 | head -3)
+  case "$out" in
+    *Exception*|*error*|*Error*|*denied*)
+      printf '      → 막혔다: %s\n' "$(printf '%s' "$out" | head -1)"; return 1 ;;
+    '')
+      printf '      → 조회는 됐으나 내용이 비었다\n'; return 1 ;;
+    *)
+      printf '      → 읽힌다! %s\n' "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"; return 0 ;;
+  esac
+}
+
 probe_deep() {
   local shared="$1" n pkg auth line
   echo
@@ -1509,32 +1527,71 @@ com.android.soundrecorder"
 $(pm list packages 2>/dev/null | sed 's/^package://' \
     | grep -iE 'voicenote|voicerecorder|recorder|dialer|telephonyui|callrecord')"
   fi
+  local apk n_auth
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
     have pm && ! pm path "$cand" >/dev/null 2>&1 && continue
     found_pkg=$((found_pkg + 1))
     printf '  앱: %s (설치됨)\n' "$cand"
-    have dumpsys || continue
-    while IFS= read -r auth; do
-      [ -n "$auth" ] || continue
-      found_auth=$((found_auth + 1))
-      printf '    provider: %s\n' "$auth"
-      # 안내만 하고 끝내면 아무것도 확정되지 않는다. 실제로 쳐 봐야
-      # '열려 있다'인지 'SecurityException'인지 답이 나온다.
-      out=$(content query --uri "content://$auth/" 2>&1 | head -3)
-      if [ -z "$out" ]; then
-        printf '      → 조회는 됐으나 내용이 비었다\n'
+
+    # C-1. dumpsys 로 물어본다. 막히는 기기가 많다.
+    n_auth=0
+    if have dumpsys; then
+      while IFS= read -r auth; do
+        [ -n "$auth" ] || continue
+        n_auth=$((n_auth + 1)); try_authority "$auth" && found_auth=$((found_auth + 1))
+      done < <(dumpsys package "$cand" 2>/dev/null \
+                 | grep -oE 'authority=[^ ]+' | cut -d= -f2 | tr ';' '\n' | sort -u | head -5)
+    fi
+    [ "$n_auth" -gt 0 ] && continue
+    echo "    C-1 dumpsys: provider 를 못 얻었다(막혔다). APK 에서 직접 캔다."
+
+    # C-2. dumpsys 는 한 가지 경로일 뿐이고, 원본은 앱의 AndroidManifest.xml 이다.
+    #      그건 APK 안에 있고 시스템 APK 는 누구나 읽는다. 이진 XML 이지만
+    #      문자열 풀은 평문이라 authority 문자열이 그대로 잡힌다.
+    apk=$(pm path "$cand" 2>/dev/null | sed 's/^package://' | head -1)
+    if [ -z "$apk" ] || [ ! -r "$apk" ]; then
+      echo "    C-2 APK: 경로를 못 얻거나 읽을 수 없다"
+    elif ! have unzip; then
+      # 조용히 건너뛰면 또 '못 봤다'로 끝난다. 무엇이 없어서 못 했는지 말한다.
+      echo "    C-2 APK: unzip 이 없어 열지 못했다 →  pkg install unzip  후 다시 실행해라"
+    else
+      # 'provider' 라는 낱말이 든 것만 고르면 안 된다. 실제 authority 는
+      # 'com.sec...voicenote.recordings' 처럼 그 낱말이 없는 경우가 흔하다.
+      # 패키지 이름으로 시작하는 점 표기 문자열을 모두 후보로 본다. 'provider'
+      # 가 든 것을 앞세우되, 나머지도 뒤이어 찔러 본다 — 조회는 값싸다.
+      local names
+      names=$(unzip -p "$apk" AndroidManifest.xml 2>/dev/null \
+                | tr -c 'a-zA-Z0-9._' '\n' \
+                | grep -aE "^${cand}[a-zA-Z0-9_.]+$" | sort -u)
+      if [ -z "$names" ]; then
+        echo "    C-2 APK: 매니페스트에서 패키지 이름으로 시작하는 문자열을 못 찾았다"
       else
-        printf '      → %s\n' "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+        while IFS= read -r auth; do
+          [ -n "$auth" ] || continue
+          n_auth=$((n_auth + 1)); try_authority "$auth" && found_auth=$((found_auth + 1))
+        done < <({ printf '%s\n' "$names" | grep -i 'provider'
+                   printf '%s\n' "$names" | grep -iv 'provider'; } | head -8)
       fi
-    done < <(dumpsys package "$cand" 2>/dev/null \
-               | grep -oE 'authority=[^ ]+' | cut -d= -f2 | tr ';' '\n' | sort -u | head -5)
+    fi
   done < <(printf '%s\n' "$CANDS" | sort -u)
+
+  # C-3. 이름을 몰라도 후보는 몇 개뿐이다. 그냥 찔러 본다 — 열리면 내용이,
+  #      막히면 SecurityException 이 나온다. 어느 쪽이든 답이다.
+  if [ "$found_auth" = "0" ]; then
+    echo "  C-3 알려진 authority 를 직접 찔러 본다:"
+    for auth in com.sec.android.app.voicenote.provider \
+                com.sec.android.app.voicenote \
+                com.samsung.android.app.telephonyui.callrecording \
+                com.samsung.android.callrecording.provider; do
+      try_authority "$auth" && found_auth=$((found_auth + 1))
+    done
+  fi
 
   if [ "$found_pkg" = "0" ]; then
     echo "  후보 패키지가 하나도 설치돼 있지 않다 (또는 pm 이 조회조차 막는다)."
   elif [ "$found_auth" = "0" ]; then
-    echo "  앱은 있으나 provider 를 하나도 못 읽었다 (dumpsys 가 막혔다)."
+    echo "  앱은 있으나 어느 경로로도 provider 를 읽지 못했다 (C-1·C-2·C-3 전부 실패)."
   fi
 
   echo
