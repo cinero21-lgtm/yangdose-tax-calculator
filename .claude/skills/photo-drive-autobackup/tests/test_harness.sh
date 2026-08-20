@@ -1608,6 +1608,83 @@ check "calls 가 전사도 올린다"      1 "$(find "$ROOT/remote" -name '통�
 rm -rf "$SHARED/Recordings" "$SHARED/Drop"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
+echo "== 116. transcripts: 남은 일 목록과 손수 짝짓기 =="
+# 주기적으로 하려면 '무엇이 아직 안 됐는지'가 있어야 한다. 그리고 삼성 노트를
+# 거쳐 나온 전사는 노트 제목이 이름이라 시각이 없다 — 그건 손으로 붙여야 한다.
+rm -rf "$SHARED/Recordings" "$SHARED/Drop"; mkdir -p "$SHARED/Recordings/Call" "$SHARED/Drop"
+CALLDIR="$SHARED/Recordings/Call"
+# 실제 화면에 보이는 세 가지 이름꼴. 셋 다 끝이 _YYMMDD_HHMMSS 다.
+printf 'a1' > "$CALLDIR/통화 01075907672_260820_161055.m4a"
+printf 'a2' > "$CALLDIR/통화 현대카드_260820_182610.m4a"
+printf 'a3' > "$CALLDIR/음성 메시지 01075907672_260820_171533.m4a"
+# 이미 전사가 붙어 있는 녹음 — 남은 일 목록에 뜨면 안 된다
+printf 'a4' > "$CALLDIR/통화 01033334444_260820_112710.m4a"
+printf '이미있음' > "$CALLDIR/통화 01033334444_260820_112710.txt"
+# 삼성 노트를 거쳐 나온 전사 — 시각이 없다
+printf '서류 제출 확인 내용' > "$SHARED/Drop/서류 제출 확인 및 대출 일정 문의 통화.txt"
+
+T=(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" TRANSCRIPT_DROP_DIRS="$SHARED/Drop" \
+   "$SKILL/scripts/photo-autobackup.sh" transcripts)
+out=$("${T[@]}" 2>&1)
+
+# 건너뜀 안내문에도 같은 낱말이 나온다. 제목 줄만 센다.
+check "남은 일 목록을 보여준다"     1 "$(echo "$out" | grep -c '^아직 전사가 없는 녹음')"
+check "전사 없는 녹음이 다 뜬다"     3 "$(echo "$out" | grep -cE '^  260820_(161055|182610|171533)  ')"
+# 목록의 시각은 pair 에 그대로 넣는 열쇠다. 이름 안 번호가 아니라 진짜 시각이어야 한다.
+check "이름에 든 번호를 시각으로 안 본다" 1 "$(echo "$out" | grep -c '^  260820_161055  통화 01075907672')"
+check "짝 있는 녹음은 목록에 없다"   0 "$(echo "$out" | grep -c '260820_112710  ')"
+check "시각 없는 것에 pair 를 안내"  1 "$(echo "$out" | grep -c 'transcripts pair')"
+check "안내에 실제 경로가 들어간다"  1 "$(echo "$out" | grep -c '서류 제출 확인 및 대출 일정 문의 통화.txt\" <시각>')"
+check "짐작해서 안 붙인다"           0 "$(ls "$CALLDIR"/*.txt 2>/dev/null | grep -vc '260820_112710' || true)"
+
+P=(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" \
+   "$SKILL/scripts/photo-autobackup.sh" transcripts pair)
+DROPPED="$SHARED/Drop/서류 제출 확인 및 대출 일정 문의 통화.txt"
+
+out=$(DRY_RUN=1 "${P[@]}" "$DROPPED" 260820_182610 2>&1)
+check "pair 예행연습은 파일을 안 만든다" 0 "$([ -f "$CALLDIR/통화 현대카드_260820_182610.txt" ] && echo 1 || echo 0)"
+check "pair 예행연습도 결과를 보여준다" 1 "$(echo "$out" | grep -c 'DRY-RUN')"
+
+out=$("${P[@]}" "$DROPPED" 260820_182610 2>&1)
+check "pair 가 시각만으로 붙인다"    1 "$([ -f "$CALLDIR/통화 현대카드_260820_182610.txt" ] && echo 1 || echo 0)"
+check "pair 가 내용을 보존한다"      1 "$(grep -c '서류 제출 확인 내용' "$CALLDIR/통화 현대카드_260820_182610.txt")"
+check "pair 도 원본을 남긴다"        1 "$([ -f "$DROPPED" ] && echo 1 || echo 0)"
+
+# 이미 짝이 있는 녹음에 또 붙이면 어느 쪽이 맞는지 알 길이 없다. 막는다.
+out=$("${P[@]}" "$DROPPED" 260820_112710 2>&1); rc=$?
+check "pair 가 이미 있는 짝을 안 덮는다" 1 "$(echo "$out" | grep -c '덮지 않는다')"
+check "그때 실패로 끝난다"           1 "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+check "기존 전사는 그대로다"         1 "$(grep -c '이미있음' "$CALLDIR/통화 01033334444_260820_112710.txt")"
+
+out=$("${P[@]}" "$DROPPED" 991231_235959 2>&1); rc=$?
+check "없는 시각은 실패한다"         1 "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+check "그때 아무 파일도 안 만든다"   2 "$(ls "$CALLDIR"/*.txt 2>/dev/null | wc -l | tr -d ' ')"
+out=$("${P[@]}" "$DROPPED" 아무거나 2>&1)
+check "시각 꼴이 아니면 거른다"      1 "$(echo "$out" | grep -c '시각(YYMMDD_HHMMSS) 꼴도 아니다')"
+
+# --upload 는 이어서 calls 까지 간다. 옵션이 없으면 안 간다.
+printf '전사 260820_161055' > "$SHARED/Drop/통화 260820_161055.txt"
+out=$("${T[@]}" 2>&1)
+check "옵션 없으면 calls 를 안 돈다" 0 "$(echo "$out" | grep -c '통화녹취 스윕 시작')"
+rm -f "$CALLDIR/통화 01075907672_260820_161055.txt"
+printf '전사 260820_171533' > "$SHARED/Drop/통화 260820_171533.txt"
+out=$(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" TRANSCRIPT_DROP_DIRS="$SHARED/Drop" \
+      "$SKILL/scripts/photo-autobackup.sh" transcripts --upload 2>&1)
+check "--upload 는 calls 까지 간다"  1 "$(echo "$out" | grep -c '통화녹취 스윕 시작')"
+check "--upload 가 전사를 올린다"    1 "$(find "$ROOT/remote" -name '음성 메시지 01075907672_260820_171533.txt' | wc -l | tr -d ' ')"
+
+# 목록이 길면 잘라내되, 잘라냈다는 사실과 총 건수를 숨기지 않는다.
+rm -rf "$SHARED/Recordings" "$SHARED/Drop"; mkdir -p "$CALLDIR" "$SHARED/Drop"
+for i in 01 02 03 04 05 06 07 08 09 10 11 12; do
+  printf 'x' > "$CALLDIR/통화 01011112222_260820_1010${i}.m4a"
+done
+out=$("${T[@]}" 2>&1)
+check "열 건까지만 보여준다"         10 "$(echo "$out" | grep -cE '^  260820_1010[0-9]{2}  ')"
+check "잘라낸 것을 밝힌다"           1 "$(echo "$out" | grep -c '그 밖에 2건 더 (모두 12건)')"
+
+rm -rf "$SHARED/Recordings" "$SHARED/Drop"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

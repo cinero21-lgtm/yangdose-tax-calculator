@@ -121,6 +121,8 @@ curl -fsSL https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculat
 |---|---|
 | `probe` | 통화녹취 환경 조사 (읽기 전용) |
 | `calls` | 통화녹취를 올린다. 폰에서는 **지우지 않는다** |
+| `transcripts [--upload]` | 앱에서 손수 내보낸 전사를 녹음과 짝지어 주고, 아직 전사가 없는 녹음을 알려 준다. `--upload`면 이어서 `calls`까지 |
+| `transcripts pair <전사> <녹음\|시각>` | 이름에 시각이 없는 전사(삼성 노트를 거친 것)를 손으로 붙인다. 짐작해서 붙이는 일은 없다 |
 | `update` | 스크립트를 최신본으로 갱신. 폰에서 긴 URL을 붙여넣지 않아도 된다 |
 | `perm` | 권한만 짧게 점검하고 필요한 설정 화면을 폰에 띄운다 |
 | `setup [사진폴더] [동영상폴더]` | 폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다 |

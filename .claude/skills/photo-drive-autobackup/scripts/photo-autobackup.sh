@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.11.0"
+VERSION="2.12.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -1282,8 +1282,66 @@ stamp_of() {
   printf '%s' "${base%.*}" | grep -oE '[0-9]{6}_[0-9]{6}$'
 }
 
+# 이름이 깨진 전사를 사람이 직접 붙인다. 삼성 노트를 거쳐 나온 파일은 노트
+# 제목을 이름으로 갖기 때문에(예: '서류 제출 확인 및 대출 일정 문의 통화.txt')
+# 시각이 없다. 짐작해서 붙이면 남의 통화 내용이 엉뚱한 녹음에 달린 채 드라이브로
+# 올라간다. 그래서 추측은 하지 않고, 사람이 어느 녹음인지 지정하게 한다.
+transcripts_pair() {
+  local src="${1:-}" target="${2:-}" rec="" ext dest f
+  if [ -z "$src" ] || [ -z "$target" ]; then
+    echo "사용법: photo-autobackup.sh transcripts pair <전사파일> <녹음경로|시각>"
+    echo "  시각은 260820_112710 꼴. 'transcripts' 목록에 찍히는 그 값이다."
+    return 1
+  fi
+  [ -f "$src" ] || { echo "전사 파일이 없다: $src"; return 1; }
+  is_transcript "$src" || {
+    echo "전사로 볼 확장자가 아니다(TRANSCRIPT_EXTENSIONS=$TRANSCRIPT_EXTENSIONS): $src"
+    return 1
+  }
+
+  if [ -f "$target" ]; then
+    rec="$target"
+  else
+    case "$target" in
+      [0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+      *) echo "녹음 경로도 아니고 시각(YYMMDD_HHMMSS) 꼴도 아니다: $target"; return 1 ;;
+    esac
+    while IFS= read -r f; do
+      is_transcript "$f" && continue
+      [ "$(stamp_of "$f")" = "$target" ] && { rec="$f"; break; }
+    done < <(find_call_files 2>/dev/null)
+    [ -n "$rec" ] || { echo "$target 에 해당하는 녹음이 없다."; return 1; }
+  fi
+
+  # 확장자만 다른 전사가 이미 있으면 덮지 않는다. 같은 통화에 서로 다른 전사가
+  # 둘 붙는 것도 막는다 — 어느 쪽이 맞는지 나중에 알 길이 없다.
+  if siblings_of_class "$rec" transcript >/dev/null 2>&1; then
+    echo "이미 전사 짝이 있다. 덮지 않는다: $(basename "$rec")"
+    return 1
+  fi
+  ext="${src##*.}"
+  dest="${rec%.*}.$ext"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[DRY-RUN] $(basename "$src") -> $(basename "$dest")"
+    return 0
+  fi
+  if cp "$src" "$dest" 2>/dev/null; then
+    echo "[짝지음] $(basename "$src") -> $(basename "$dest")"
+    echo "이제 'photo-autobackup.sh calls' 를 돌리면 녹음과 함께 올라간다."
+    return 0
+  fi
+  echo "복사하지 못했다: $src"
+  return 1
+}
+
 cmd_transcripts() {
-  local f stamp rec base ext dest n_ok=0 n_dup=0 n_miss=0 d
+  local f stamp rec base ext dest n_ok=0 n_dup=0 n_miss=0 d do_upload=0
+  case "${1:-}" in
+    pair)     shift; transcripts_pair "$@"; return $? ;;
+    --upload) do_upload=1 ;;
+    '')       ;;
+    *)        echo "모르는 인자다: $1"; echo "사용법: transcripts [--upload] | transcripts pair <전사파일> <녹음|시각>"; return 1 ;;
+  esac
   echo "손수 내보낸 전사를 녹음과 짝지어 준다"
   echo "  찾는 곳: $(transcript_drop_dirs | tr '\n' ' ')"
   echo
@@ -1310,6 +1368,8 @@ cmd_transcripts() {
       # 시각을 못 읽으면 어느 통화인지 알 수 없다. 짐작해서 붙이면 남의 통화
       # 내용이 엉뚱한 녹음에 달린다. 추측하지 않고 사람에게 넘긴다.
       echo "  [건너뜀] 파일명에 녹음 시각(YYMMDD_HHMMSS)이 없다: $(basename "$f")"
+      echo "           → photo-autobackup.sh transcripts pair \"$f\" <시각>"
+      echo "             (아래 '아직 전사가 없는 녹음' 목록에서 시각을 골라 적어라)"
       n_miss=$((n_miss + 1)); continue
     fi
     rec=""
@@ -1347,8 +1407,37 @@ cmd_transcripts() {
 
   echo
   echo "짝지음 $n_ok건, 이미있음 $n_dup건, 건너뜀 $n_miss건"
+
+  # 주기적으로 하려면 '무엇이 아직 안 됐는지'가 있어야 한다. 없으면 매번 통화
+  # 전부를 처음부터 훑어야 하고, 그러면 손이 안 간다.
+  local n_todo=0 shown=0 line
+  echo
+  while IFS= read -r line; do
+    n_todo=$((n_todo + 1))
+    [ "$shown" -ge 10 ] && continue
+    [ "$shown" = "0" ] && echo "아직 전사가 없는 녹음 — 앱에서 열어 내보내라"
+    shown=$((shown + 1))
+    printf '  %s  %s\n' "${line%%	*}" "$(basename "${line#*	}")"
+  done < <(while IFS= read -r f; do
+             is_transcript "$f" && continue
+             siblings_of_class "$f" transcript >/dev/null 2>&1 && continue
+             stamp=$(stamp_of "$f"); [ -n "$stamp" ] || stamp="(시각없음)"
+             printf '%s\t%s\t%s\n' "$(stat -c %Y "$f" 2>/dev/null || echo 0)" "$stamp" "$f"
+           done < <(find_call_files 2>/dev/null) | sort -rn | cut -f2-)
+  if [ "$n_todo" = "0" ]; then
+    echo "전사가 빠진 녹음은 없다."
+  elif [ "$n_todo" -gt "$shown" ]; then
+    echo "  ... 그 밖에 $((n_todo - shown))건 더 (모두 $n_todo건)"
+  fi
+
   if [ "$n_ok" -gt 0 ]; then
-    echo "이제 'photo-autobackup.sh calls' 를 돌리면 녹음과 함께 올라간다."
+    if [ "$do_upload" = "1" ]; then
+      echo
+      cmd_calls
+    else
+      echo
+      echo "이제 'photo-autobackup.sh calls' 를 돌리면 녹음과 함께 올라간다."
+    fi
   fi
   return 0
 }
@@ -2044,7 +2133,11 @@ usage() {
   probe [--deep]   통화녹취 환경 조사 (읽기 전용 — 아무것도 올리거나 지우지 않는다)
                    --deep 은 전사가 앱 밖에 파일로 있는지 끝까지 훑는다
   calls            통화녹취를 올린다. 폰에서는 지우지 않는다(복사)
-  transcripts      앱에서 손수 내보낸 전사를 녹음과 짝지어 준다 (그다음 calls)
+  transcripts [--upload]
+                   앱에서 손수 내보낸 전사를 녹음과 짝지어 주고, 아직 전사가
+                   없는 녹음을 알려 준다. --upload 면 이어서 calls 까지 간다
+  transcripts pair <전사파일> <녹음|시각>
+                   이름에 시각이 없는 전사(삼성 노트를 거친 것)를 손으로 붙인다
   update           스크립트를 최신본으로 갱신 (긴 URL 붙여넣기 불필요)
   perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
   setup [사진폴더] [동영상폴더]
@@ -2069,7 +2162,7 @@ main() {
   load_config
   case "${1:-}" in
     probe)          shift; cmd_probe "$@" ;;
-    transcripts)    cmd_transcripts ;;
+    transcripts)    shift; cmd_transcripts "$@" ;;
     calls)          cmd_calls ;;
     update)         cmd_update ;;
     perm)           cmd_perm ;;
