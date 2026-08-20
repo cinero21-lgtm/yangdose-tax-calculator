@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.3.1"
+VERSION="2.3.2"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -1396,7 +1396,8 @@ cmd_update() {
   [ -w "$self" ] || die "쓸 수 없다: $self"
 
   tmp="$(mktemp)"
-  local u got=0 n=0
+  local u got=0 n=0 errf
+  errf="$(mktemp)"
   # 시간 제한이 없으면 모바일 회선이 멎었을 때 curl 이 영영 기다린다.
   # 화면에 아무것도 안 나오니 사용자는 "무반응" 으로 볼 수밖에 없다.
   # 어느 주소를 시도 중인지도 찍어야 멈춘 지점을 알 수 있다.
@@ -1404,16 +1405,25 @@ cmd_update() {
     n=$((n + 1))
     echo "내려받는 중 [$n]: $u"
     if curl -fsSL --connect-timeout "$UPDATE_CONNECT_TIMEOUT" \
-            --max-time "$UPDATE_MAX_TIME" "$u" -o "$tmp" && [ -s "$tmp" ]; then
+            --max-time "$UPDATE_MAX_TIME" "$u" -o "$tmp" 2>"$errf" && [ -s "$tmp" ]; then
       got=1; break
     fi
-    echo "  실패. 다음 주소를 시도한다."
+    # main 은 머지 전까지 늘 404 다. 정상 경로의 404 를 빨간 오류처럼 보여 주면
+    # 사용자가 성공한 갱신을 실패로 읽는다. 실제로 그렇게 읽혔다.
+    # 그렇다고 stderr 를 버리면 진짜 실패했을 때 원인(DNS·인증서·시간초과)까지
+    # 사라지므로, 모아 두었다가 전부 실패했을 때만 보여 준다.
+    echo "  없다. 다음 주소를 시도한다."
   done
   if [ "$got" = "0" ]; then
-    rm -f "$tmp"
+    if [ -s "$errf" ]; then
+      echo "마지막 오류:"
+      sed 's/^/  /' "$errf"
+    fi
+    rm -f "$tmp" "$errf"
     die "내려받기 실패. 인터넷 연결을 확인하거나, 저장소 주소가 바뀌었는지 확인해라:
      $UPDATE_URLS"
   fi
+  rm -f "$errf"
   # 받다 만 파일로 덮어쓰면 도구 자체가 죽는다. 실행 가능한지 먼저 본다.
   if ! bash -n "$tmp" 2>/dev/null; then
     rm -f "$tmp"; die "받은 파일이 온전하지 않다. 덮어쓰지 않았다."

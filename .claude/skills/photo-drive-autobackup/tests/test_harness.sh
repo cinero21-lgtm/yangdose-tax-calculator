@@ -1064,7 +1064,7 @@ for a in "$@"; do
   case "$a" in http*|file*) url="$a" ;; esac
   prev="$a"
 done
-case "$url" in *bad*) exit 7 ;; esac
+case "$url" in *bad*) echo "curl: (22) 404 STUBERR" >&2; exit 7 ;; esac
 [ -n "$dest" ] && cp "$CURLSRC" "$dest"
 STUB
 chmod 755 "$ROOT/bin/curl"
@@ -1072,6 +1072,15 @@ out=$(CURLSRC="$ROOT/newer3.sh" UPDATE_URL="http://bad/pab.sh http://good/pab.sh
       PATH="$ROOT/bin:$PATH" bash "$ROOT/bin/pab-to.sh" update 2>&1)
 check "죽은 주소를 건너뛴다"      1 "$(echo "$out" | grep -c '다음 주소를 시도한다')"
 check "다음 주소로 갱신 성공"     1 "$(echo "$out" | grep -c 'v97.0.0')"
+# main 은 머지 전까지 늘 404 다. 그 404 를 오류로 보여 주면 성공한 갱신이
+# 실패로 읽힌다 — 실기기에서 사용자가 실제로 그렇게 읽었다.
+check "성공한 갱신에는 curl 오류가 안 보인다" 0 "$(echo "$out" | grep -c 'STUBERR')"
+
+# 조용하게 만드느라 진단을 잃으면 안 된다. 전부 실패하면 이유가 보여야 한다.
+out=$(CURLSRC="$ROOT/newer3.sh" UPDATE_URL="http://bad1/pab.sh http://bad2/pab.sh" \
+      PATH="$ROOT/bin:$PATH" bash "$ROOT/bin/pab-to.sh" update 2>&1)
+check "전부 실패하면 이유가 보인다" 1 "$(echo "$out" | grep -c 'STUBERR')"
+check "전부 실패하면 갱신 안 한다"  0 "$(echo "$out" | grep -c 'v97.0.0')"
 rm -f "$ROOT/bin/curl" "$ROOT/bin/pab-to.sh" "$ROOT/bin/pab-to.sh.bak" "$ROOT/newer3.sh" "$CURLLOG"
 
 echo "== 94. 업로드 유예(HOLD_DAYS) — 갓 찍은 것은 건드리지 않는다 =="
