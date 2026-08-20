@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.10.0"
+VERSION="2.11.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -26,7 +26,7 @@ OVERRIDABLE="DRY_RUN REQUIRE_WIFI RCLONE_REMOTE DRIVE_FOLDER VIDEO_DRIVE_FOLDER
 WATCH_DIRS MIGRATE_ROOTS LAYOUT MIGRATE_LAYOUT HOLD_DAYS RETENTION_DAYS MAX_ATTEMPTS
 CALL_ENABLED CALL_DIRS EXTENSIONS VIDEO_EXTENSIONS CALL_EXTENSIONS
 TRANSCRIPT_EXTENSIONS CALL_DRIVE_IN CALL_DRIVE_OUT CALL_DRIVE_UNKNOWN
-MIN_AGE_SECONDS POLL_SECONDS RCLONE_EXTRA_ARGS"
+MIN_AGE_SECONDS POLL_SECONDS RCLONE_EXTRA_ARGS TRANSCRIPT_DROP_DIRS"
 for _n in $OVERRIDABLE; do
   eval "_v=\${$_n-}"
   [ -n "$_v" ] && eval "_ENVSET_$_n=\$_v"
@@ -70,6 +70,9 @@ CALL_ENABLED=0
 CALL_DIRS=""                       # 비면 자동 탐색
 CALL_EXTENSIONS="m4a mp3 amr wav aac 3gp 3gpp"
 TRANSCRIPT_EXTENSIONS="txt md json srt vtt"
+# 앱에서 전사를 손수 내보냈을 때 그 파일이 떨어지는 곳. transcripts 명령이 여기를
+# 뒤져 녹음과 짝지어 준다. 자동 추출이 막힌 기기에서 쓰는 보조 경로다.
+TRANSCRIPT_DROP_DIRS=""
 CALL_DRIVE_IN="수신녹취"
 CALL_DRIVE_OUT="발신통화녹취"
 CALL_DRIVE_UNKNOWN="통화녹취_미분류"
@@ -1247,6 +1250,109 @@ siblings_of_class() {
 
 paired_audio_of() { siblings_of_class "$1" audio | head -n1; }
 
+# --------------------------------------------- 손수 내보낸 전사를 녹음과 짝지어 준다
+# 전사를 앱 밖으로 자동 추출할 수 없는 기기가 있다(삼성 통화 녹음이 그렇다 —
+# provider 가 전부 권한 거부다). 그래도 사람이 앱에서 하나씩 내보낼 수는 있으므로,
+# 그 경로를 막아 두지 않는다. 손이 가는 부분은 딱 하나 — 내보낸 파일의 이름을
+# 녹음과 똑같이 맞추는 것이고, 그게 제일 고약하다. 그 부분만 대신 해 준다.
+transcript_drop_dirs() {
+  local d real shared
+  if [ -n "$TRANSCRIPT_DROP_DIRS" ]; then
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      real=$(resolve_dir "$d"); [ -d "$real" ] && printf '%s\n' "$real"
+    done < <(printf '%s\n' "$TRANSCRIPT_DROP_DIRS")
+  else
+    shared=$(resolve_dir "$HOME/storage/shared")
+    for d in "$shared/Download" "$shared/Documents"; do
+      [ -d "$d" ] && printf '%s\n' "$d"
+    done
+  fi
+}
+
+# 파일명에서 녹음 시각(YYMMDD_HHMMSS)을 뽑는다. 삼성 녹음은 이 꼴로 이름을 짓고,
+# 앱이 내보낸 전사도 대개 같은 시각을 물려받는다. 그게 유일하게 믿을 만한 열쇠다.
+#
+# 반드시 '확장자 앞 끝'에 붙은 것만 본다. 아무 데서나 찾으면 상대 전화번호가
+# 가짜 시각이 된다 — '통화 01011112222_260820_112710.m4a' 에서 왼쪽부터 찾으면
+# '112222_260820'(번호 뒷자리 + 날짜)이 먼저 걸려, 같은 통화의 녹음과 전사가
+# 서로 다른 열쇠를 갖게 되고 짝짓기가 통째로 실패한다. 시험이 이걸 잡아냈다.
+stamp_of() {
+  local base="${1##*/}"
+  printf '%s' "${base%.*}" | grep -oE '[0-9]{6}_[0-9]{6}$'
+}
+
+cmd_transcripts() {
+  local f stamp rec base ext dest n_ok=0 n_dup=0 n_miss=0 d
+  echo "손수 내보낸 전사를 녹음과 짝지어 준다"
+  echo "  찾는 곳: $(transcript_drop_dirs | tr '\n' ' ')"
+  echo
+
+  # 녹음 목록을 시각 -> 경로로 미리 훑어 둔다. 파일마다 다시 훑으면 느리다.
+  local -a rstamp=() rpath=()
+  while IFS= read -r rec; do
+    is_transcript "$rec" && continue
+    stamp=$(stamp_of "$(basename "$rec")")
+    [ -n "$stamp" ] || continue
+    rstamp+=("$stamp"); rpath+=("$rec")
+  done < <(find_call_files 2>/dev/null)
+
+  if [ "${#rstamp[@]}" = "0" ]; then
+    echo "  녹음 파일을 찾지 못했다. CALL_DIRS 설정을 확인해라."
+    return 1
+  fi
+
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    is_transcript "$f" || continue
+    stamp=$(stamp_of "$(basename "$f")")
+    if [ -z "$stamp" ]; then
+      # 시각을 못 읽으면 어느 통화인지 알 수 없다. 짐작해서 붙이면 남의 통화
+      # 내용이 엉뚱한 녹음에 달린다. 추측하지 않고 사람에게 넘긴다.
+      echo "  [건너뜀] 파일명에 녹음 시각(YYMMDD_HHMMSS)이 없다: $(basename "$f")"
+      n_miss=$((n_miss + 1)); continue
+    fi
+    rec=""
+    local i=0
+    while [ "$i" -lt "${#rstamp[@]}" ]; do
+      [ "${rstamp[$i]}" = "$stamp" ] && { rec="${rpath[$i]}"; break; }
+      i=$((i + 1))
+    done
+    if [ -z "$rec" ]; then
+      echo "  [건너뜀] $stamp 에 해당하는 녹음이 없다: $(basename "$f")"
+      n_miss=$((n_miss + 1)); continue
+    fi
+    ext="${f##*.}"
+    dest="${rec%.*}.$ext"
+    if [ -e "$dest" ]; then
+      echo "  [이미있음] $(basename "$dest")"
+      n_dup=$((n_dup + 1)); continue
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+      echo "  [DRY-RUN] $(basename "$f") -> $(basename "$dest")"
+      n_ok=$((n_ok + 1)); continue
+    fi
+    # 옮기지 않고 복사한다. 사용자가 내보낸 원본은 그 자리에 그대로 둔다.
+    if cp "$f" "$dest" 2>/dev/null; then
+      echo "  [짝지음] $(basename "$f") -> $(basename "$dest")"
+      n_ok=$((n_ok + 1))
+    else
+      echo "  [실패] 복사하지 못했다: $(basename "$f")"
+      n_miss=$((n_miss + 1))
+    fi
+  done < <(while IFS= read -r d; do
+             [ -n "$d" ] || continue
+             find "$d" -maxdepth 1 -type f ! -name '.*' 2>/dev/null
+           done < <(transcript_drop_dirs))
+
+  echo
+  echo "짝지음 $n_ok건, 이미있음 $n_dup건, 건너뜀 $n_miss건"
+  if [ "$n_ok" -gt 0 ]; then
+    echo "이제 'photo-autobackup.sh calls' 를 돌리면 녹음과 함께 올라간다."
+  fi
+  return 0
+}
+
 is_transcript() {
   local lower ext
   lower=$(printf '%s' "${1##*.}" | tr 'A-Z' 'a-z')
@@ -1938,6 +2044,7 @@ usage() {
   probe [--deep]   통화녹취 환경 조사 (읽기 전용 — 아무것도 올리거나 지우지 않는다)
                    --deep 은 전사가 앱 밖에 파일로 있는지 끝까지 훑는다
   calls            통화녹취를 올린다. 폰에서는 지우지 않는다(복사)
+  transcripts      앱에서 손수 내보낸 전사를 녹음과 짝지어 준다 (그다음 calls)
   update           스크립트를 최신본으로 갱신 (긴 URL 붙여넣기 불필요)
   perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
   setup [사진폴더] [동영상폴더]
@@ -1962,6 +2069,7 @@ main() {
   load_config
   case "${1:-}" in
     probe)          shift; cmd_probe "$@" ;;
+    transcripts)    cmd_transcripts ;;
     calls)          cmd_calls ;;
     update)         cmd_update ;;
     perm)           cmd_perm ;;

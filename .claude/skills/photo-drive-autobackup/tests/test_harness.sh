@@ -1509,6 +1509,9 @@ rm -f "$PIDF"
 
 echo "== 113. doctor 가 공용 client_id 를 경고한다 (실패로는 안 만든다) =="
 # 2026년 중 폐지되면 백업이 통째로 멈춘다. NOTICE 는 로그에 묻혀 아무도 안 본다.
+# 하네스 공용 rclone 스텁을 잠시 갈아끼운다. 원본을 챙겨 두지 않고 지우면
+# 뒤따르는 시험이 전부 'rclone: command not found' 로 무너진다 — 실제로 그랬다.
+cp "$ROOT/bin/rclone" "$ROOT/rclone.orig"
 cat > "$ROOT/bin/rclone" <<'RC2'
 #!/usr/bin/env bash
 case "$1" in
@@ -1558,7 +1561,52 @@ check "대화상자 띄우는 법을 알린다"  1 "$(echo "$out" | grep -c 'ter
 # pm 을 못 찾으면 앱 유무를 단정하면 안 된다
 out=$(env ANDROID_BIN_DIR="$ROOT/nonexistent" CALL_ENABLED=1       "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
 check "pm 없으면 단정하지 않는다"   1 "$(echo "$out" | grep -c '앱 설치 여부는 확인하지 못했다')"
-rm -f "$ROOT/bin/termux-call-log" "$ROOT/bin/rclone"; rm -rf "$ROOT/sysbin"
+rm -f "$ROOT/bin/termux-call-log"; rm -rf "$ROOT/sysbin"
+mv "$ROOT/rclone.orig" "$ROOT/bin/rclone"      # 공용 스텁을 되돌린다
+
+echo "== 115. transcripts: 손수 내보낸 전사를 녹음과 짝지어 준다 =="
+# 전사 자동 추출이 막힌 기기(삼성)에서도 사람이 앱에서 하나씩 내보낼 수는 있다.
+# 그 경로를 열어 둔다. 손이 가는 부분은 이름 맞추기 하나뿐이고 그게 제일 고약하다.
+rm -rf "$SHARED/Recordings" "$SHARED/Drop"; mkdir -p "$SHARED/Recordings/Call" "$SHARED/Drop"
+CALLDIR="$SHARED/Recordings/Call"
+printf 'audio1' > "$CALLDIR/통화 01011112222_260820_112710.m4a"
+printf 'audio2' > "$CALLDIR/통화 01033334444_260820_181242.m4a"
+# 앱이 내보낸 전사 — 이름은 다르지만 녹음 시각이 들어 있다
+printf '전사본문A' > "$SHARED/Drop/녹음 전사 260820_112710.txt"
+# 시각이 없는 것 — 어느 통화인지 알 수 없다. 짐작해서 붙이면 안 된다.
+printf '정체불명'   > "$SHARED/Drop/메모.txt"
+# 해당하는 녹음이 없는 것
+printf '고아'       > "$SHARED/Drop/통화 990101_010101.txt"
+
+T=(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" TRANSCRIPT_DROP_DIRS="$SHARED/Drop" \
+   "$SKILL/scripts/photo-autobackup.sh" transcripts)
+
+out=$(DRY_RUN=1 "${T[@]}" 2>&1)
+check "예행연습은 파일을 안 만든다" 0 "$(ls "$CALLDIR"/*.txt 2>/dev/null | wc -l | tr -d ' ')"
+check "예행연습도 짝을 보여준다"    1 "$(echo "$out" | grep -c 'DRY-RUN')"
+
+out=$("${T[@]}" 2>&1)
+check "녹음과 같은 이름으로 짝지음" 1 "$([ -f "$CALLDIR/통화 01011112222_260820_112710.txt" ] && echo 1 || echo 0)"
+check "내용이 보존된다"             1 "$(grep -c '전사본문A' "$CALLDIR/통화 01011112222_260820_112710.txt")"
+check "원본은 그 자리에 남는다"     1 "$([ -f "$SHARED/Drop/녹음 전사 260820_112710.txt" ] && echo 1 || echo 0)"
+check "시각 없는 것은 건너뛴다"     1 "$(echo "$out" | grep -c '녹음 시각(YYMMDD_HHMMSS)이 없다')"
+check "짝 없는 것은 건너뛴다"       1 "$(echo "$out" | grep -c '해당하는 녹음이 없다')"
+# 추측해서 아무 녹음에나 붙이면 남의 통화 내용이 엉뚱한 곳에 달린다 — 절대 금지
+check "엉뚱한 녹음에 안 붙인다"     0 "$([ -f "$CALLDIR/통화 01033334444_260820_181242.txt" ] && echo 1 || echo 0)"
+check "다음 단계를 알려준다"        1 "$(echo "$out" | grep -c 'calls')"
+
+# 두 번 돌려도 덮어쓰지 않는다
+out=$("${T[@]}" 2>&1)
+# 요약 줄에도 같은 낱말이 나온다. 항목 줄만 센다.
+check "이미 있으면 건드리지 않는다" 1 "$(echo "$out" | grep -c '\[이미있음\]')"
+
+# 짝지어진 전사는 calls 가 녹음과 함께 올린다 (기존 짝 업로드 기능)
+out=$(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" \
+      "$SKILL/scripts/photo-autobackup.sh" calls 2>&1)
+echo "$out" > "$ROOT/calls115.log"
+check "calls 가 전사도 올린다"      1 "$(find "$ROOT/remote" -name '통화 01011112222_260820_112710.txt' | wc -l | tr -d ' ')"
+rm -rf "$SHARED/Recordings" "$SHARED/Drop"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
 echo
 echo "합계: PASS=$pass FAIL=$fail"
