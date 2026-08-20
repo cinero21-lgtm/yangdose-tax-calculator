@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.2.1"
+VERSION="2.2.2"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -1310,6 +1310,8 @@ cmd_probe() {
 UPDATE_BASE="https://raw.githubusercontent.com/cinero21-lgtm/yangdose-tax-calculator"
 UPDATE_PATH=".claude/skills/photo-drive-autobackup/scripts/photo-autobackup.sh"
 UPDATE_URLS="${UPDATE_URL:-$UPDATE_BASE/main/$UPDATE_PATH $UPDATE_BASE/claude/auto-photo-upload-delete-4prnja/$UPDATE_PATH}"
+UPDATE_CONNECT_TIMEOUT="${UPDATE_CONNECT_TIMEOUT:-10}"
+UPDATE_MAX_TIME="${UPDATE_MAX_TIME:-120}"
 
 cmd_update() {
   local self tmp newver
@@ -1323,10 +1325,18 @@ cmd_update() {
   [ -w "$self" ] || die "쓸 수 없다: $self"
 
   tmp="$(mktemp)"
-  echo "내려받는 중..."
-  local u got=0
+  local u got=0 n=0
+  # 시간 제한이 없으면 모바일 회선이 멎었을 때 curl 이 영영 기다린다.
+  # 화면에 아무것도 안 나오니 사용자는 "무반응" 으로 볼 수밖에 없다.
+  # 어느 주소를 시도 중인지도 찍어야 멈춘 지점을 알 수 있다.
   for u in $UPDATE_URLS; do
-    if curl -fsSL "$u" -o "$tmp" && [ -s "$tmp" ]; then got=1; break; fi
+    n=$((n + 1))
+    echo "내려받는 중 [$n]: $u"
+    if curl -fsSL --connect-timeout "$UPDATE_CONNECT_TIMEOUT" \
+            --max-time "$UPDATE_MAX_TIME" "$u" -o "$tmp" && [ -s "$tmp" ]; then
+      got=1; break
+    fi
+    echo "  실패. 다음 주소를 시도한다."
   done
   if [ "$got" = "0" ]; then
     rm -f "$tmp"

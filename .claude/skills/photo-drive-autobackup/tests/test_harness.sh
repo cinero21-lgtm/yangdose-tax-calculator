@@ -1029,6 +1029,47 @@ check "inode 가 바뀜(제자리 덮어쓰기 아님)" 1 "$([ "$ino_before" != 
 check "이번 실행은 옛 버전임을 알림" 1 "$(echo "$out" | grep -c '다음 명령부터 새 버전')"
 rm -f "$SELF" "$SELF.bak" "$ROOT/newer2.sh"
 
+echo "== 93. update 의 내려받기가 영영 매달리지 않는다 =="
+# 실기기에서 update 가 화면에 아무것도 안 내놓고 멈췄다. 시간 제한 없는 curl 이
+# 멎은 회선을 무한정 기다린 것이다. 진행 표시도 없어 어디서 멈췄는지 알 수 없었다.
+CURLLOG="$ROOT/curl.args"
+cat > "$ROOT/bin/curl" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$CURLLOG"
+dest=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && dest="$a"; prev="$a"; done
+[ -n "$dest" ] && cp "$CURLSRC" "$dest"
+STUB
+chmod 755 "$ROOT/bin/curl"
+sed 's|^VERSION=.*|VERSION="97.0.0"|' "$SKILL/scripts/photo-autobackup.sh" > "$ROOT/newer3.sh"
+cp "$SKILL/scripts/photo-autobackup.sh" "$ROOT/bin/pab-to.sh"; chmod 755 "$ROOT/bin/pab-to.sh"
+
+out=$(CURLLOG="$CURLLOG" CURLSRC="$ROOT/newer3.sh" UPDATE_URL="http://예시/pab.sh" \
+      PATH="$ROOT/bin:$PATH" bash "$ROOT/bin/pab-to.sh" update 2>&1)
+
+check "연결 시간 제한을 준다"     1 "$(grep -c -- '--connect-timeout 10' "$CURLLOG")"
+check "전체 시간 제한을 준다"     1 "$(grep -c -- '--max-time 120' "$CURLLOG")"
+check "시도 중인 주소를 보여준다" 1 "$(echo "$out" | grep -c '내려받는 중 \[1\]: http://예시/pab.sh')"
+
+# 첫 주소가 죽어도 다음 주소로 넘어가며, 넘어갔다고 말해야 한다
+cat > "$ROOT/bin/curl" <<'STUB'
+#!/bin/bash
+dest=""; prev=""; url=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && dest="$a"
+  case "$a" in http*|file*) url="$a" ;; esac
+  prev="$a"
+done
+case "$url" in *bad*) exit 7 ;; esac
+[ -n "$dest" ] && cp "$CURLSRC" "$dest"
+STUB
+chmod 755 "$ROOT/bin/curl"
+out=$(CURLSRC="$ROOT/newer3.sh" UPDATE_URL="http://bad/pab.sh http://good/pab.sh" \
+      PATH="$ROOT/bin:$PATH" bash "$ROOT/bin/pab-to.sh" update 2>&1)
+check "죽은 주소를 건너뛴다"      1 "$(echo "$out" | grep -c '다음 주소를 시도한다')"
+check "다음 주소로 갱신 성공"     1 "$(echo "$out" | grep -c 'v97.0.0')"
+rm -f "$ROOT/bin/curl" "$ROOT/bin/pab-to.sh" "$ROOT/bin/pab-to.sh.bak" "$ROOT/newer3.sh" "$CURLLOG"
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
