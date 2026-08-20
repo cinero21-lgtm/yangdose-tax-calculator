@@ -1384,6 +1384,39 @@ rm -f "$ROOT/bin/pm" "$ROOT/bin/dumpsys" "$ROOT/bin/content" "$CLOG" "$ROOT/voic
 rm -rf "$APKDIR" "$SHARED/Recordings"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
+echo "== 107. content 가 PATH 에 없어도 /system/bin 에서 찾아 실제로 조회한다 =="
+# 실기기에서 '→ content 명령이 없다' 만 찍고 "C-1·C-2·C-3 전부 실패" 라고 끝났다.
+# 조회를 한 번도 안 해 보고 낸 결론이었다. Termux 의 PATH 에 /system/bin 이
+# 없는 것이 원인이지, provider 가 막힌 것이 아니었다.
+rm -rf "$SHARED/Recordings" "$ROOT/sysbin"; mkdir -p "$SHARED/Recordings/Call" "$ROOT/sysbin"
+printf 'a' > "$SHARED/Recordings/Call/통화 01011112222_260820_101010.m4a"
+cat > "$ROOT/sysbin/content" <<'SB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$CONTENT_LOG"
+echo "Row: 0 _id=1, text=전사본문"
+SB
+chmod 755 "$ROOT/sysbin/content"
+CLOG="$ROOT/content107.args"; : > "$CLOG"
+# PATH 에는 content 가 없다 — ANDROID_BIN_DIR 로만 찾을 수 있어야 한다
+out=$(env ANDROID_BIN_DIR="$ROOT/sysbin" CONTENT_LOG="$CLOG" CALL_ENABLED=1 \
+      CALL_DIRS="$SHARED/Recordings/Call" "$SKILL/scripts/photo-autobackup.sh" probe --deep 2>&1)
+check "PATH 에 없어도 찾아낸다"     0 "$(echo "$out" | grep -c 'content 를 찾지 못했다')"
+check "조회를 실제로 실행한다"      1 "$([ -s "$CLOG" ] && echo 1 || echo 0)"
+check "읽혔음을 알린다"             1 "$(echo "$out" | grep -q '읽힌다!' && echo 1 || echo 0)"
+
+echo "== 108. content 가 정말 없으면 '실패'가 아니라 '미확인'이라고 말한다 =="
+# 이번 재발의 본질 — 못 찾은 것과 거부당한 것을 같은 문장으로 쓰면 안 된다.
+: > "$CLOG"
+out=$(env ANDROID_BIN_DIR="$ROOT/nonexistent" CONTENT_LOG="$CLOG" CALL_ENABLED=1 \
+      CALL_DIRS="$SHARED/Recordings/Call" "$SKILL/scripts/photo-autobackup.sh" probe --deep 2>&1)
+check "못 찾았다고 밝힌다"          1 "$(echo "$out" | grep -q 'content 를 찾지 못했다' && echo 1 || echo 0)"
+check "미확인이라고 말한다"         1 "$(echo "$out" | grep -c '실패가 아니라 미확인이다')"
+check "'전부 실패'라고 안 한다"     0 "$(echo "$out" | grep -c '전부 거부당했다')"
+check "확인 방법을 알려 준다"       1 "$(echo "$out" | grep -c 'ANDROID_BIN_DIR=')"
+check "조회를 하지도 않았다"        0 "$([ -s "$CLOG" ] && echo 1 || echo 0)"
+rm -rf "$ROOT/sysbin" "$SHARED/Recordings"; rm -f "$CLOG"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"

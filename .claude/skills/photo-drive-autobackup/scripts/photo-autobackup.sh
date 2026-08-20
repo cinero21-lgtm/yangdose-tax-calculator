@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.7.0"
+VERSION="2.8.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -112,6 +112,19 @@ log() {
 die() { log ERROR "$*"; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# 안드로이드 기본 도구(content·pm·dumpsys·am)는 /system/bin 에 있는데, Termux 의
+# PATH 는 $PREFIX/bin 위주라 command -v 로는 못 찾는 경우가 흔하다. 못 찾은 것을
+# '없다'로 취급하면 조회를 한 번도 안 해 보고 "실패"라고 결론짓게 된다 —
+# 실기기에서 정확히 그렇게 됐다. PATH 다음에 /system/bin 을 직접 본다.
+# 시험에서 가짜 도구를 물릴 수 있도록 탐색 위치를 환경변수로 바꿀 수 있게 둔다.
+ANDROID_BIN_DIR="${ANDROID_BIN_DIR:-/system/bin}"
+android_tool() {
+  local p
+  p=$(command -v "$1" 2>/dev/null) && { printf '%s' "$p"; return 0; }
+  [ -x "$ANDROID_BIN_DIR/$1" ] && { printf '%s/%s' "$ANDROID_BIN_DIR" "$1"; return 0; }
+  return 1
+}
 
 # termux-api 명령은 동반 앱(Termux:API)이 없거나 권한 대화상자에 답한 적이 없으면
 # 응답 없이 영영 매달린다. 더 나쁜 건 그동안 터미널에 입력한 것이 전부 그 명령의
@@ -1442,10 +1455,15 @@ cmd_probe() {
 # 쳐 봐야 '열려 있다'인지 'SecurityException'인지 답이 나온다.
 # 읽는 데 성공했을 때만 0 을 돌려준다.
 try_authority() {
-  local auth="$1" out
+  local auth="$1" out bin
   printf '    provider: %s\n' "$auth"
-  have content || { printf '      → content 명령이 없다\n'; return 1; }
-  out=$(content query --uri "content://$auth/" 2>&1 | head -3)
+  if ! bin=$(android_tool content); then
+    # '못 찾음'과 '거부당함'은 전혀 다른 사건이다. 뭉뚱그리면 해 보지도 않고
+    # 안 된다고 결론짓게 된다.
+    printf '      → content 를 찾지 못했다 (PATH·%s 둘 다 없음)\n' "$ANDROID_BIN_DIR"
+    return 2
+  fi
+  out=$("$bin" query --uri "content://$auth/" 2>&1 | head -3)
   case "$out" in
     *Exception*|*error*|*Error*|*denied*)
       printf '      → 막혔다: %s\n' "$(printf '%s' "$out" | head -1)"; return 1 ;;
@@ -1513,7 +1531,7 @@ probe_deep() {
   # 앱에게 목록을 주지 않는다. 그래서 열거에 기대면 여기서 늘 막힌다.
   # 그러나 '열거'가 막힌 것이지 '이름을 아는 패키지 조회'까지 막힌 것은 아니다.
   # 삼성 녹음·통화 앱의 이름은 알려져 있으므로 하나씩 직접 찌른다.
-  local cand found_pkg=0 found_auth=0 auth out
+  local cand found_pkg=0 found_auth=0 auth out pmbin dsbin no_content=0
   local CANDS="com.sec.android.app.voicenote
 com.samsung.android.app.telephonyui
 com.samsung.android.dialer
@@ -1521,35 +1539,45 @@ com.samsung.android.incallui
 com.samsung.android.smartcallprovider
 com.samsung.android.callrecording
 com.android.soundrecorder"
+  pmbin=$(android_tool pm) || pmbin=""
+  dsbin=$(android_tool dumpsys) || dsbin=""
+  [ -n "$pmbin" ] || echo "  pm 을 찾지 못했다 (PATH·$ANDROID_BIN_DIR 둘 다 없음)"
+  [ -n "$dsbin" ] || echo "  dumpsys 를 찾지 못했다 (PATH·$ANDROID_BIN_DIR 둘 다 없음)"
   # pm list 가 되는 기기라면 후보 밖의 앱도 잡을 수 있으니 보조로 쓴다.
-  if have pm; then
+  if [ -n "$pmbin" ]; then
     CANDS="$CANDS
-$(pm list packages 2>/dev/null | sed 's/^package://' \
+$("$pmbin" list packages 2>/dev/null | sed 's/^package://' \
     | grep -iE 'voicenote|voicerecorder|recorder|dialer|telephonyui|callrecord')"
   fi
   local apk n_auth
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
-    have pm && ! pm path "$cand" >/dev/null 2>&1 && continue
+    [ -n "$pmbin" ] && ! "$pmbin" path "$cand" >/dev/null 2>&1 && continue
     found_pkg=$((found_pkg + 1))
     printf '  앱: %s (설치됨)\n' "$cand"
 
     # C-1. dumpsys 로 물어본다. 막히는 기기가 많다.
     n_auth=0
-    if have dumpsys; then
+    if [ -n "$dsbin" ]; then
       while IFS= read -r auth; do
         [ -n "$auth" ] || continue
-        n_auth=$((n_auth + 1)); try_authority "$auth" && found_auth=$((found_auth + 1))
-      done < <(dumpsys package "$cand" 2>/dev/null \
+        n_auth=$((n_auth + 1))
+        try_authority "$auth"; case $? in 0) found_auth=$((found_auth + 1)) ;; 2) no_content=1 ;; esac
+      done < <("$dsbin" package "$cand" 2>/dev/null \
                  | grep -oE 'authority=[^ ]+' | cut -d= -f2 | tr ';' '\n' | sort -u | head -5)
     fi
     [ "$n_auth" -gt 0 ] && continue
-    echo "    C-1 dumpsys: provider 를 못 얻었다(막혔다). APK 에서 직접 캔다."
+    if [ -n "$dsbin" ]; then
+      echo "    C-1 dumpsys: provider 를 못 얻었다(막혔다). APK 에서 직접 캔다."
+    else
+      echo "    C-1 dumpsys: 명령을 못 찾아 건너뛴다. APK 에서 직접 캔다."
+    fi
 
     # C-2. dumpsys 는 한 가지 경로일 뿐이고, 원본은 앱의 AndroidManifest.xml 이다.
     #      그건 APK 안에 있고 시스템 APK 는 누구나 읽는다. 이진 XML 이지만
     #      문자열 풀은 평문이라 authority 문자열이 그대로 잡힌다.
-    apk=$(pm path "$cand" 2>/dev/null | sed 's/^package://' | head -1)
+    apk=""
+    [ -n "$pmbin" ] && apk=$("$pmbin" path "$cand" 2>/dev/null | sed 's/^package://' | head -1)
     if [ -z "$apk" ] || [ ! -r "$apk" ]; then
       echo "    C-2 APK: 경로를 못 얻거나 읽을 수 없다"
     elif ! have unzip; then
@@ -1569,7 +1597,8 @@ $(pm list packages 2>/dev/null | sed 's/^package://' \
       else
         while IFS= read -r auth; do
           [ -n "$auth" ] || continue
-          n_auth=$((n_auth + 1)); try_authority "$auth" && found_auth=$((found_auth + 1))
+          n_auth=$((n_auth + 1))
+          try_authority "$auth"; case $? in 0) found_auth=$((found_auth + 1)) ;; 2) no_content=1 ;; esac
         done < <({ printf '%s\n' "$names" | grep -i 'provider'
                    printf '%s\n' "$names" | grep -iv 'provider'; } | head -8)
       fi
@@ -1584,14 +1613,19 @@ $(pm list packages 2>/dev/null | sed 's/^package://' \
                 com.sec.android.app.voicenote \
                 com.samsung.android.app.telephonyui.callrecording \
                 com.samsung.android.callrecording.provider; do
-      try_authority "$auth" && found_auth=$((found_auth + 1))
+      try_authority "$auth"; case $? in 0) found_auth=$((found_auth + 1)) ;; 2) no_content=1 ;; esac
     done
   fi
 
-  if [ "$found_pkg" = "0" ]; then
+  # 한 번도 조회를 못 해 봤으면 '실패'가 아니다. 해 보지도 않고 안 된다고
+  # 결론짓는 것이 이 조사에서 세 번 반복된 결함이다.
+  if [ "$no_content" = "1" ]; then
+    echo "  ※ content 명령을 못 찾아 조회를 한 번도 실행하지 못했다 — 실패가 아니라 미확인이다."
+    echo "    확인:  ls -l $ANDROID_BIN_DIR/content   /  다른 위치면  ANDROID_BIN_DIR=<경로> 로 지정"
+  elif [ "$found_pkg" = "0" ]; then
     echo "  후보 패키지가 하나도 설치돼 있지 않다 (또는 pm 이 조회조차 막는다)."
   elif [ "$found_auth" = "0" ]; then
-    echo "  앱은 있으나 어느 경로로도 provider 를 읽지 못했다 (C-1·C-2·C-3 전부 실패)."
+    echo "  앱은 있으나 조회한 provider 가 전부 거부당했다 (C-1·C-2·C-3)."
   fi
 
   echo
