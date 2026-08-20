@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.4.0"
+VERSION="2.5.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -510,11 +510,14 @@ collect_candidates() {
   done < <(split_dirs "$WATCH_DIRS") | exclude_call_paths
 }
 
-# 폰 전체에서 '진짜 사진'만 골라낸다. 앱 캐시·썸네일·다운로드 임시파일은 건너뛴다 —
-# 이런 것까지 올리면 드라이브가 쓰레기로 차고, 지우면 앱이 깨진다.
 # 전사 파일이 녹음 폴더가 아닌 다른 데 저장되는 기종이 있다. 녹음 폴더만 보고
 # "없다"고 답하면 그 경우를 놓치므로, MIGRATE_ROOTS 전체를 한 번 훑는다.
 # probe 에서만 쓰는 조사용이다 — 업로드 대상 선정에는 관여하지 않는다.
+#
+# 업로드용 스캔과 달리 'Android/data' 를 건너뛰지 않는다. 앱이 전사를 파일로
+# 남긴다면 바로 거기일 가능성이 가장 크기 때문이다. 제외 규칙은 '쓰레기를 올리지
+# 않기' 위한 것이라 업로드에는 옳지만, '어디 있는지 찾기'에는 정반대로 틀렸다.
+# 전사 확장자만 보므로 캐시 쓰레기가 딸려올 위험은 없다.
 find_transcripts_anywhere() {
   local root real args=() ext
   [ -n "$TRANSCRIPT_EXTENSIONS" ] || return 0
@@ -524,14 +527,16 @@ find_transcripts_anywhere() {
     [ -n "$root" ] || continue
     real=$(resolve_dir "$root"); [ -d "$real" ] || continue
     find "$real" \
-      \( -name '.thumbnails' -o -name 'cache' -o -name 'Cache' -o -name '.cache' \
-         -o -path '*/Android/data' -o -path '*/Android/obb' -o -name '.trashed*' \) -prune -o \
+      \( -name '.thumbnails' -o -name '.cache' -o -name '.trashed*' \) -prune -o \
       -type f \( "${args[@]}" \) \
       ! -name '.*' \
       ! -path "$TRASH_DIR/*" ! -path "$STATE_DIR/*" \
       -print 2>/dev/null
   done < <(split_dirs "$MIGRATE_ROOTS")
 }
+
+# 폰 전체에서 '진짜 사진'만 골라낸다. 앱 캐시·썸네일·다운로드 임시파일은 건너뛴다 —
+# 이런 것까지 올리면 드라이브가 쓰레기로 차고, 지우면 앱이 깨진다.
 
 discover_all() {
   local root real args=() ext
@@ -1306,13 +1311,31 @@ cmd_calls() {
   if [ "$seen_tr" = "0" ]; then
     log INFO "전사 파일을 하나도 찾지 못했다. 앱이 텍스트를 파일로 저장하지 않거나 다른 위치일 수 있다 — probe 로 확인해라."
   fi
+
+  # 전사를 자동으로 못 가져오는 기기에서는 사람이 드라이브에서 Gemini 에게 시켜야
+  # 하는데, 그걸 잊는 것이 실제 실패 지점이다. 로그는 아무도 안 보므로 알림을 띄운다.
+  # 새로 올라간 것이 있을 때만 띄운다 — 매 주기 뜨면 사람이 알림을 꺼 버리고,
+  # 그러면 이 대책 자체가 통째로 무효가 된다.
+  if [ "$n_up" -gt 0 ] && [ "$seen_tr" = "0" ]; then
+    notify "통화녹취 ${n_up}건 업로드" \
+           "드라이브에서 Gemini 에게 전사를 요청하세요 → $CALL_DRIVE_IN / $CALL_DRIVE_OUT"
+  elif [ "$n_up" -gt 0 ]; then
+    notify "통화녹취 ${n_up}건 업로드" "전사 ${n_tr}건 포함"
+  fi
   return 0
 }
 
 # ------------------------------------------------------- 폰에 무엇이 있는지 조사
 # 읽기 전용. 아무것도 올리거나 지우지 않는다.
 cmd_probe() {
-  local shared d n sample f cnt
+  local shared d n sample f cnt deep=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --deep) deep=1 ;;
+      *) die "알 수 없는 옵션: $1 (사용법: probe [--deep])" ;;
+    esac
+    shift
+  done
   shared=$(resolve_dir "$HOME/storage/shared")
   echo "========== 통화녹취 환경 조사 (v$VERSION) =========="
   echo
@@ -1406,9 +1429,88 @@ cmd_probe() {
   echo "  발신 → $RCLONE_REMOTE:$CALL_DRIVE_OUT/"
   echo "  미분류 → $RCLONE_REMOTE:$CALL_DRIVE_UNKNOWN/"
   echo "  정책: 업로드 후에도 폰에 그대로 둔다(복사)"
+  [ "$deep" = "1" ] && probe_deep "$shared"
   echo "=================================================="
   drop_call_log
   return 0
+}
+
+# 앱이 전사를 앱 내부에만 두는 것처럼 보일 때, 정말 손댈 수 없는지 끝까지 확인한다.
+# "없다"고 결론 내리기 전에 무엇을 어디까지 봤는지 남기는 것이 목적이다 —
+# 못 찾아도 다음 판단의 근거가 된다.
+probe_deep() {
+  local shared="$1" n pkg auth line
+  echo
+  echo "---------- 깊은 조사 (--deep) ----------"
+
+  # A. 확장자를 안 가린다. 전사가 .stt/.dat 이거나 확장자가 없으면 지금까지 전부 놓쳤다.
+  echo
+  echo "[A] 최근 만들어진 '미디어가 아닌' 파일 (확장자 무관)"
+  n=0
+  while IFS= read -r line; do
+    n=$((n + 1)); [ "$n" -le 15 ] && printf '  %s\n' "$line"
+  done < <(find "$shared" -type f -mtime -3 \
+             ! -iname '*.jpg' ! -iname '*.jpeg' ! -iname '*.png' ! -iname '*.gif' \
+             ! -iname '*.mp4' ! -iname '*.m4a' ! -iname '*.mov' ! -iname '*.webp' \
+             ! -iname '*.heic' ! -iname '*.dng' ! -iname '*.mp3' ! -iname '*.amr' \
+             ! -path '*/.thumbnails/*' ! -path "$TRASH_DIR/*" ! -path "$STATE_DIR/*" \
+             2>/dev/null)
+  if [ "$n" = "0" ]; then
+    echo "  없음 — 앱이 최근 3일 안에 파일을 하나도 안 떨궜다."
+  else
+    echo "  총 ${n}건$([ "$n" -gt 15 ] && echo ' (위 15건만 표시)')"
+  fi
+
+  # B. Android/data 는 공유 저장소 위에 있다. 업로드용 스캔은 일부러 건너뛰지만
+  #    전사를 찾는 입장에서는 가장 유력한 자리다.
+  echo
+  echo "[B] Android/data 안의 녹음·통화 관련 앱 폴더"
+  if [ -d "$shared/Android/data" ]; then
+    n=0
+    while IFS= read -r line; do
+      n=$((n + 1)); printf '  %s\n' "$line"
+    done < <(ls "$shared/Android/data" 2>/dev/null | grep -iE 'voice|record|call|tele|dialer')
+    if [ "$n" = "0" ]; then
+      echo "  관련 폴더 없음 (또는 안드로이드가 목록을 막았다)"
+    else
+      echo "  → 위 폴더 안을 직접 뒤져라:  ls -R \"$shared/Android/data/<폴더>\" | head -40"
+    fi
+  else
+    echo "  접근 불가 — 안드로이드 11+ 가 Android/data 를 막고 있다."
+  fi
+
+  # C. 앱이 ContentProvider 를 열어 두었다면 내부 DB 를 그대로 읽을 수 있다.
+  #    루팅도, 유료 앱도, UI 자동화도 필요 없는 가장 깔끔한 길이다.
+  echo
+  echo "[C] 녹음·통화 앱과 그 ContentProvider"
+  if have pm; then
+    n=0
+    while IFS= read -r pkg; do
+      pkg=${pkg#package:}
+      [ -n "$pkg" ] || continue
+      n=$((n + 1))
+      printf '  앱: %s\n' "$pkg"
+      if have dumpsys; then
+        while IFS= read -r auth; do
+          [ -n "$auth" ] && printf '    provider: %s\n' "$auth"
+        done < <(dumpsys package "$pkg" 2>/dev/null \
+                   | grep -oE 'authority=[^ ]+' | cut -d= -f2 | tr ';' '\n' | sort -u | head -5)
+      fi
+    done < <(pm list packages 2>/dev/null | grep -iE 'voicenote|voicerecorder|recorder|dialer|telephonyui')
+    [ "$n" = "0" ] && echo "  못 찾았다 (pm 이 목록을 안 준다)"
+    echo
+    echo "  provider 가 보이면 이렇게 읽어 본다 (권한이 열려 있으면 내용이 나온다):"
+    echo "    content query --uri content://<provider>/"
+  else
+    echo "  pm 명령을 쓸 수 없다."
+  fi
+
+  echo
+  echo "  ※ A·B·C 가 전부 비면 전사는 앱 내부 DB 에만 있다. 루팅 없이 파일로 꺼내려면"
+  echo "    Tasker+AutoInput 같은 접근성 자동화로 앱의 '텍스트 내보내기'를 대신 눌러야"
+  echo "    한다. 저장되는 폴더를 CALL_DIRS 에 더하면 그다음은 이 스크립트가 처리한다."
+  echo "  ※ 그 전까지는 음성만 올리고 전사는 드라이브의 Gemini 에게 맡긴다."
+  echo "----------------------------------------"
 }
 
 # ------------------------------------------------------------------- 자체 업데이트
@@ -1609,6 +1711,18 @@ cmd_status() {
   echo "감시 폴더       : $WATCH_DIRS"
   echo "감시 대기       : ${pending}건 (올릴 차례 ${ready} / 유예 중 ${held})"
   echo "업로드 유예     : ${HOLD_DAYS}일 (찍은 지 이만큼 지나야 올린다)"
+  if [ "$CALL_ENABLED" = "1" ]; then
+    # 전사를 자동으로 못 가져오는 기기에서는 Gemini 에게 시킬 일이 밀린다.
+    # 알림을 놓쳐도 여기서 숫자로 걸리게 한다.
+    local ca=0 notr=0
+    # find_call_files 는 음성과 전사를 함께 준다. 전사가 아닌 것이 곧 녹음이다.
+    while IFS= read -r f; do
+      is_transcript "$f" && continue
+      ca=$((ca + 1))
+      siblings_of_class "$f" transcript >/dev/null 2>&1 || notr=$((notr + 1))
+    done < <(find_call_files 2>/dev/null)
+    echo "통화녹취        : ${ca}건 (전사 짝 없음 ${notr}건 — Gemini 전사 대기)"
+  fi
   echo "폰 전체 사진    : ${everything}건 (검사 범위: $MIGRATE_ROOTS)"
   echo "휴지통          : ${trashed}건 (보관 ${RETENTION_DAYS}일, $(du -sh "$TRASH_DIR" 2>/dev/null | cut -f1))"
   echo "누적 백업       : $(($(wc -l < "$MANIFEST") - 1))건"
@@ -1621,7 +1735,8 @@ usage() {
   cat <<'USAGE'
 사용법: photo-autobackup.sh <명령>
 
-  probe            통화녹취 환경 조사 (읽기 전용 — 아무것도 올리거나 지우지 않는다)
+  probe [--deep]   통화녹취 환경 조사 (읽기 전용 — 아무것도 올리거나 지우지 않는다)
+                   --deep 은 전사가 앱 밖에 파일로 있는지 끝까지 훑는다
   calls            통화녹취를 올린다. 폰에서는 지우지 않는다(복사)
   update           스크립트를 최신본으로 갱신 (긴 URL 붙여넣기 불필요)
   perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
@@ -1646,7 +1761,7 @@ USAGE
 main() {
   load_config
   case "${1:-}" in
-    probe)          cmd_probe ;;
+    probe)          shift; cmd_probe "$@" ;;
     calls)          cmd_calls ;;
     update)         cmd_update ;;
     perm)           cmd_perm ;;

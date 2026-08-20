@@ -1186,6 +1186,65 @@ check "녹음 폴더 옆의 짝을 센다"    1 "$(echo "$out" | grep -c '녹음
 check "불필요하게 전체를 안 훑는다" 0 "$(echo "$out" | grep -c '폰 전체를 훑는다')"
 rm -rf "$SHARED/Recordings" "$SHARED/전사보관"
 
+echo "== 97. 전사 조사는 Android/data 안까지 본다 =="
+# 업로드용 스캔은 Android/data 를 일부러 건너뛴다(앱 캐시 쓰레기 방지). 그러나
+# 전사를 '찾는' 입장에서는 거기가 가장 유력한 자리다. 제외를 그대로 물려받으면
+# 정작 찾으려는 물건이 있는 곳만 안 보게 된다.
+rm -rf "$SHARED/Recordings" "$SHARED/Android"
+mkdir -p "$SHARED/Recordings/Call" "$SHARED/Android/data/com.sec.voicenote/files"
+printf 'a' > "$SHARED/Recordings/Call/통화 01011112222_260820_101010.m4a"
+printf '전사 본문' > "$SHARED/Android/data/com.sec.voicenote/files/통화 01011112222_260820_101010.txt"
+out=$(CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "Android/data 의 전사를 찾아낸다" 1 "$(echo "$out" | grep -c '다른 폴더에서 1건 발견')"
+check "없다고 잘못 단정하지 않는다"     0 "$(echo "$out" | grep -c '폰 어디에도 파일로는 없다')"
+
+echo "== 98. probe --deep 는 A·B·C 를 빠짐없이 찍는다 =="
+# 못 찾더라도 '무엇을 어디까지 봤는지'가 남아야 다음 판단이 선다.
+out=$(CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" probe --deep 2>&1)
+check "A 확장자 무관 스윕"        1 "$(echo "$out" | grep -c '\[A\] 최근 만들어진')"
+check "B Android/data 열거"       1 "$(echo "$out" | grep -c '\[B\] Android/data')"
+check "C 앱·provider 열거"        1 "$(echo "$out" | grep -c '\[C\] 녹음·통화 앱')"
+# 출력 전체를 세면 [A] 의 경로에도 같은 이름이 있어 부풀려진다. B 절만 잘라 본다.
+bsec=$(echo "$out" | sed -n '/\[B\] Android\/data/,/\[C\] /p')
+check "B 가 관련 앱 폴더를 찾는다" 1 "$(echo "$bsec" | grep -c 'com.sec.voicenote')"
+check "막혔을 때의 다음 수를 밝힌다" 1 "$(echo "$out" | grep -c 'Tasker')"
+# --deep 없이 부르면 이 절이 나오면 안 된다 (기본 probe 를 길게 만들지 않는다)
+out=$(CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
+check "--deep 없이는 안 나온다"   0 "$(echo "$out" | grep -c '깊은 조사')"
+check "알 수 없는 옵션은 거부한다" 1 "$("$SKILL/scripts/photo-autobackup.sh" probe --없는옵션 2>&1 | grep -c '알 수 없는 옵션')"
+
+echo "== 99. 녹취를 올리면 알리고, 올릴 게 없으면 안 알린다 =="
+# 전사를 자동으로 못 가져오는 기기에서는 사람이 Gemini 에게 시켜야 하는데 그걸
+# 잊는 것이 실제 실패 지점이다. 그렇다고 매번 띄우면 알림을 꺼 버려 대책이 죽는다.
+cat > "$ROOT/bin/termux-notification" <<'TN'
+#!/usr/bin/env bash
+printf '%s
+' "$*" >> "$NOTIFY_LOG"
+TN
+chmod 755 "$ROOT/bin/termux-notification"
+NL="$ROOT/notify99.log"; : > "$NL"
+rm -f "$SHARED/Android/data/com.sec.voicenote/files"/*
+NOTIFY_LOG="$NL" CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"   "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "업로드하면 알린다"          1 "$(grep -c '통화녹취 1건 업로드' "$NL")"
+check "Gemini 전사를 상기시킨다"   1 "$(grep -c 'Gemini' "$NL")"
+
+# 두 번째 실행 — 이미 올렸으니 새로 올릴 것이 없다 → 알림이 늘면 안 된다
+before=$(wc -l < "$NL")
+NOTIFY_LOG="$NL" CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"   "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
+check "올릴 게 없으면 안 알린다"   "$before" "$(wc -l < "$NL")"
+
+echo "== 100. status 가 '전사 짝 없음' 건수를 센다 =="
+out=$(CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" status 2>&1)
+check "짝 없는 녹취를 센다"        1 "$(echo "$out" | grep -c '전사 짝 없음 1건')"
+# 짝을 놓아 주면 그만큼 줄어야 한다
+printf '전사' > "$SHARED/Recordings/Call/통화 01011112222_260820_101010.txt"
+out=$(CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" status 2>&1)
+check "짝이 생기면 0건이 된다"     1 "$(echo "$out" | grep -c '전사 짝 없음 0건')"
+check "통화녹취를 끄면 안 보인다"  0 "$(CALL_ENABLED=0 "$SKILL/scripts/photo-autobackup.sh" status 2>&1 | grep -c '전사 짝 없음')"
+rm -f "$ROOT/bin/termux-notification"
+rm -rf "$SHARED/Recordings" "$SHARED/Android"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
 echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
