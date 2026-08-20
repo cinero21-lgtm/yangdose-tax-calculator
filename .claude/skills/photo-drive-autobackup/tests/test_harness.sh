@@ -1206,7 +1206,7 @@ check "B Android/data 열거"       1 "$(echo "$out" | grep -c '\[B\] Android/da
 check "C 앱·provider 열거"        1 "$(echo "$out" | grep -c '\[C\] 녹음·통화 앱')"
 # 출력 전체를 세면 [A] 의 경로에도 같은 이름이 있어 부풀려진다. B 절만 잘라 본다.
 bsec=$(echo "$out" | sed -n '/\[B\] Android\/data/,/\[C\] /p')
-check "B 가 관련 앱 폴더를 찾는다" 1 "$(echo "$bsec" | grep -c 'com.sec.voicenote')"
+check "B 가 관련 앱 폴더를 찾는다" 1 "$(echo "$bsec" | grep -q 'com.sec.voicenote' && echo 1 || echo 0)"
 check "막혔을 때의 다음 수를 밝힌다" 1 "$(echo "$out" | grep -c 'Tasker')"
 # --deep 없이 부르면 이 절이 나오면 안 된다 (기본 probe 를 길게 만들지 않는다)
 out=$(CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
@@ -1242,6 +1242,70 @@ out=$(CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/p
 check "짝이 생기면 0건이 된다"     1 "$(echo "$out" | grep -c '전사 짝 없음 0건')"
 check "통화녹취를 끄면 안 보인다"  0 "$(CALL_ENABLED=0 "$SKILL/scripts/photo-autobackup.sh" status 2>&1 | grep -c '전사 짝 없음')"
 rm -f "$ROOT/bin/termux-notification"
+rm -rf "$SHARED/Recordings" "$SHARED/Android"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
+echo "== 101. [B] 는 '막힘'과 '비었음'을 구분해 단정한다 =="
+# 둘을 한 문장으로 뭉개면 '답이 아닌 것'을 답으로 착각한다. 실기기에서 그랬다.
+rm -rf "$SHARED/Recordings" "$SHARED/Android"
+mkdir -p "$SHARED/Recordings/Call"
+printf 'a' > "$SHARED/Recordings/Call/통화 01011112222_260820_101010.m4a"
+PROBE=(env CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call" "$SKILL/scripts/photo-autobackup.sh" probe --deep)
+
+# (가) Android/data 가 아예 없다 → 막혔다고 단정
+out=$("${PROBE[@]}" 2>&1)
+check "막혔음을 단정한다"        1 "$(echo "$out" | grep -c 'Android/data 를 막고 있다 (확정)')"
+
+# (나) 목록은 보이는데 관련 앱이 없다 → 여기엔 없다고 단정 (전혀 다른 문구여야 한다)
+mkdir -p "$SHARED/Android/data/com.kakao.talk" "$SHARED/Android/data/com.nhn.android.search"
+out=$("${PROBE[@]}" 2>&1)
+check "보이는 앱 개수를 찍는다"   1 "$(echo "$out" | grep -c '목록에 보이는 앱 폴더: 2개')"
+check "여기엔 없다고 단정한다"   1 "$(echo "$out" | grep -c '녹음·통화 앱 폴더가 없다 (확정)')"
+check "막힘과 다른 문구다"       0 "$(echo "$out" | grep -c 'Android/data 를 막고 있다')"
+
+# (다) 관련 앱이 있으면 그 안의 파일까지 바로 보여 준다
+mkdir -p "$SHARED/Android/data/com.sec.android.app.voicenote/files"
+printf '전사' > "$SHARED/Android/data/com.sec.android.app.voicenote/files/전사본.txt"
+out=$("${PROBE[@]}" 2>&1)
+check "관련 앱 폴더를 짚는다"     1 "$(echo "$out" | grep -c '관련: com.sec.android.app.voicenote')"
+bsec=$(echo "$out" | sed -n '/\[B\] Android\/data/,/\[C\] /p')
+check "그 안의 파일까지 보여준다" 1 "$(echo "$bsec" | grep -q '전사본.txt' && echo 1 || echo 0)"
+
+echo "== 102. [C] 는 pm list 가 막혀도 이름으로 직접 찌른다 =="
+# 안드로이드 11+ 는 앱 목록을 안 준다. 열거에 기대면 늘 여기서 막힌다.
+# 그러나 '이름을 아는 패키지 조회'는 대개 답한다 — 그 경로로 가야 한다.
+cat > "$ROOT/bin/pm" <<'PMSTUB'
+#!/bin/bash
+case "$1" in
+  list) exit 0 ;;                       # 목록은 절대 안 준다 (실기기와 동일)
+  path) case "$2" in com.sec.android.app.voicenote) echo "package:/x.apk";; *) exit 1;; esac ;;
+esac
+PMSTUB
+cat > "$ROOT/bin/dumpsys" <<'DSTUB'
+#!/bin/bash
+[ "$2" = "com.sec.android.app.voicenote" ] && echo "      authority=com.sec.voicenote.provider"
+exit 0
+DSTUB
+cat > "$ROOT/bin/content" <<'CSTUB'
+#!/bin/bash
+printf '%s
+' "$*" >> "$CONTENT_LOG"
+echo "Row: 0 _id=1, text=전사내용"
+CSTUB
+chmod 755 "$ROOT/bin/pm" "$ROOT/bin/dumpsys" "$ROOT/bin/content"
+CLOG="$ROOT/content.args"; : > "$CLOG"
+out=$(CONTENT_LOG="$CLOG" CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"       "$SKILL/scripts/photo-autobackup.sh" probe --deep 2>&1)
+check "목록이 막혀도 앱을 찾는다"   1 "$(echo "$out" | grep -c '앱: com.sec.android.app.voicenote (설치됨)')"
+check "provider 를 뽑아낸다"        1 "$(echo "$out" | grep -c 'provider: com.sec.voicenote.provider')"
+check "content query 를 실제로 친다" 1 "$(grep -c 'content://com.sec.voicenote.provider/' "$CLOG")"
+check "조회 결과를 보여 준다"        1 "$(echo "$out" | grep -c '전사내용')"
+check "설치 안 된 후보는 안 찍는다"  0 "$(echo "$out" | grep -c 'com.samsung.android.dialer (설치됨)')"
+
+echo "== 103. 기계로 막혔을 때 사람이 할 일을 알려 준다 =="
+check "앱 UI 확인을 안내한다"       1 "$(echo "$out" | grep -c '텍스트 내보내기')"
+check "폴더를 CALL_DIRS 에 더하라"  1 "$(echo "$out" | grep -q 'CALL_DIRS 에 더하면' && echo 1 || echo 0)"
+check "루팅은 권하지 않는다"        1 "$(echo "$out" | grep -c '루팅은 권하지 않는다')"
+rm -f "$ROOT/bin/pm" "$ROOT/bin/dumpsys" "$ROOT/bin/content" "$CLOG"
 rm -rf "$SHARED/Recordings" "$SHARED/Android"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 

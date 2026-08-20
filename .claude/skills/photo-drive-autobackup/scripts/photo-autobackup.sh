@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.5.0"
+VERSION="2.6.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -1466,50 +1466,88 @@ probe_deep() {
   echo
   echo "[B] Android/data 안의 녹음·통화 관련 앱 폴더"
   if [ -d "$shared/Android/data" ]; then
-    n=0
-    while IFS= read -r line; do
-      n=$((n + 1)); printf '  %s\n' "$line"
-    done < <(ls "$shared/Android/data" 2>/dev/null | grep -iE 'voice|record|call|tele|dialer')
-    if [ "$n" = "0" ]; then
-      echo "  관련 폴더 없음 (또는 안드로이드가 목록을 막았다)"
+    # 전체 항목 수를 먼저 센다. 이 숫자가 없으면 '막힌 것'과 '비어서 없는 것'이
+    # 구분되지 않아, 답이 아닌 것을 답으로 착각하게 된다.
+    local total hit=0
+    total=$(ls "$shared/Android/data" 2>/dev/null | wc -l | tr -d ' ')
+    echo "  목록에 보이는 앱 폴더: ${total}개"
+    if [ "$total" = "0" ]; then
+      echo "  → 안드로이드가 Android/data 목록을 막았다 (확정). 여기서는 못 본다."
     else
-      echo "  → 위 폴더 안을 직접 뒤져라:  ls -R \"$shared/Android/data/<폴더>\" | head -40"
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        hit=$((hit + 1)); printf '  관련: %s\n' "$line"
+        # 찾았으면 그 안까지 바로 보여 준다. 여기서 멈추면 또 한 번 왕복해야 한다.
+        find "$shared/Android/data/$line" -type f 2>/dev/null | head -10 | sed 's/^/      /'
+      done < <(ls "$shared/Android/data" 2>/dev/null | grep -iE 'voice|record|call|tele|dialer')
+      [ "$hit" = "0" ] && \
+        echo "  → 목록은 보이는데 녹음·통화 앱 폴더가 없다 (확정). 여기엔 전사가 없다."
     fi
   else
-    echo "  접근 불가 — 안드로이드 11+ 가 Android/data 를 막고 있다."
+    echo "  접근 불가 — 안드로이드 11+ 가 Android/data 를 막고 있다 (확정)."
   fi
 
   # C. 앱이 ContentProvider 를 열어 두었다면 내부 DB 를 그대로 읽을 수 있다.
   #    루팅도, 유료 앱도, UI 자동화도 필요 없는 가장 깔끔한 길이다.
   echo
   echo "[C] 녹음·통화 앱과 그 ContentProvider"
+  # 안드로이드 11+ 의 패키지 가시성 제한 때문에 'pm list packages' 는 권한 없는
+  # 앱에게 목록을 주지 않는다. 그래서 열거에 기대면 여기서 늘 막힌다.
+  # 그러나 '열거'가 막힌 것이지 '이름을 아는 패키지 조회'까지 막힌 것은 아니다.
+  # 삼성 녹음·통화 앱의 이름은 알려져 있으므로 하나씩 직접 찌른다.
+  local cand found_pkg=0 found_auth=0 auth out
+  local CANDS="com.sec.android.app.voicenote
+com.samsung.android.app.telephonyui
+com.samsung.android.dialer
+com.samsung.android.incallui
+com.samsung.android.smartcallprovider
+com.samsung.android.callrecording
+com.android.soundrecorder"
+  # pm list 가 되는 기기라면 후보 밖의 앱도 잡을 수 있으니 보조로 쓴다.
   if have pm; then
-    n=0
-    while IFS= read -r pkg; do
-      pkg=${pkg#package:}
-      [ -n "$pkg" ] || continue
-      n=$((n + 1))
-      printf '  앱: %s\n' "$pkg"
-      if have dumpsys; then
-        while IFS= read -r auth; do
-          [ -n "$auth" ] && printf '    provider: %s\n' "$auth"
-        done < <(dumpsys package "$pkg" 2>/dev/null \
-                   | grep -oE 'authority=[^ ]+' | cut -d= -f2 | tr ';' '\n' | sort -u | head -5)
+    CANDS="$CANDS
+$(pm list packages 2>/dev/null | sed 's/^package://' \
+    | grep -iE 'voicenote|voicerecorder|recorder|dialer|telephonyui|callrecord')"
+  fi
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    have pm && ! pm path "$cand" >/dev/null 2>&1 && continue
+    found_pkg=$((found_pkg + 1))
+    printf '  앱: %s (설치됨)\n' "$cand"
+    have dumpsys || continue
+    while IFS= read -r auth; do
+      [ -n "$auth" ] || continue
+      found_auth=$((found_auth + 1))
+      printf '    provider: %s\n' "$auth"
+      # 안내만 하고 끝내면 아무것도 확정되지 않는다. 실제로 쳐 봐야
+      # '열려 있다'인지 'SecurityException'인지 답이 나온다.
+      out=$(content query --uri "content://$auth/" 2>&1 | head -3)
+      if [ -z "$out" ]; then
+        printf '      → 조회는 됐으나 내용이 비었다\n'
+      else
+        printf '      → %s\n' "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
       fi
-    done < <(pm list packages 2>/dev/null | grep -iE 'voicenote|voicerecorder|recorder|dialer|telephonyui')
-    [ "$n" = "0" ] && echo "  못 찾았다 (pm 이 목록을 안 준다)"
-    echo
-    echo "  provider 가 보이면 이렇게 읽어 본다 (권한이 열려 있으면 내용이 나온다):"
-    echo "    content query --uri content://<provider>/"
-  else
-    echo "  pm 명령을 쓸 수 없다."
+    done < <(dumpsys package "$cand" 2>/dev/null \
+               | grep -oE 'authority=[^ ]+' | cut -d= -f2 | tr ';' '\n' | sort -u | head -5)
+  done < <(printf '%s\n' "$CANDS" | sort -u)
+
+  if [ "$found_pkg" = "0" ]; then
+    echo "  후보 패키지가 하나도 설치돼 있지 않다 (또는 pm 이 조회조차 막는다)."
+  elif [ "$found_auth" = "0" ]; then
+    echo "  앱은 있으나 provider 를 하나도 못 읽었다 (dumpsys 가 막혔다)."
   fi
 
   echo
-  echo "  ※ A·B·C 가 전부 비면 전사는 앱 내부 DB 에만 있다. 루팅 없이 파일로 꺼내려면"
-  echo "    Tasker+AutoInput 같은 접근성 자동화로 앱의 '텍스트 내보내기'를 대신 눌러야"
-  echo "    한다. 저장되는 폴더를 CALL_DIRS 에 더하면 그다음은 이 스크립트가 처리한다."
-  echo "  ※ 그 전까지는 음성만 올리고 전사는 드라이브의 Gemini 에게 맡긴다."
+  echo "[D] 기계로 막혔다면 앱 UI 가 답을 갖고 있다 — 30초면 확인된다"
+  echo "  삼성 음성 녹음 앱에서 통화 녹음 하나를 열고 '⋮' 를 눌러라."
+  echo "    · '텍스트 내보내기' / '전사 공유' 가 있나?"
+  echo "    · 있다면 한 건만 저장해 보고, 어느 폴더에 떨어지는지 본다"
+  echo "  그 폴더를 CALL_DIRS 에 더하면 그다음부터는 이 스크립트가 알아서 집어 올린다."
+  echo "  메뉴가 아예 없으면 남는 길은 접근성 자동화(Tasker+AutoInput)뿐이다 —"
+  echo "  통화 종료를 감지해 그 메뉴를 대신 눌러 준다. 루팅은 권하지 않는다."
+  echo
+  echo "  ※ 전사가 어떻게 결론 나든 녹취(음성) 업로드는 독립적으로 동작한다."
+  echo "    그때까지는 음성만 올리고 전사는 드라이브의 Gemini 에게 맡긴다."
   echo "----------------------------------------"
 }
 
