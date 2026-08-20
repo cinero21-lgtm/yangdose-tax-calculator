@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.2.2"
+VERSION="2.3.1"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -23,7 +23,7 @@ CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.en
 # 반드시 기본값을 넣기 '전'에 붙잡아야 한다. 뒤에 붙잡으면 기본값 자체를
 # "사용자가 환경으로 준 값"으로 오해해 설정 파일을 통째로 무시하게 된다.
 OVERRIDABLE="DRY_RUN REQUIRE_WIFI RCLONE_REMOTE DRIVE_FOLDER VIDEO_DRIVE_FOLDER
-WATCH_DIRS MIGRATE_ROOTS LAYOUT MIGRATE_LAYOUT RETENTION_DAYS MAX_ATTEMPTS
+WATCH_DIRS MIGRATE_ROOTS LAYOUT MIGRATE_LAYOUT HOLD_DAYS RETENTION_DAYS MAX_ATTEMPTS
 CALL_ENABLED CALL_DIRS EXTENSIONS VIDEO_EXTENSIONS CALL_EXTENSIONS
 TRANSCRIPT_EXTENSIONS CALL_DRIVE_IN CALL_DRIVE_OUT CALL_DRIVE_UNKNOWN
 MIN_AGE_SECONDS POLL_SECONDS RCLONE_EXTRA_ARGS"
@@ -45,6 +45,10 @@ VIDEO_DRIVE_FOLDER="동영상"
 STATE_DIR="$HOME/.local/share/photo-autobackup"
 MIN_AGE_SECONDS=20
 POLL_SECONDS=60
+# 찍자마자 올려서 폰에서 치우면, 정작 방금 찍은 사진을 보려 할 때 없다. 며칠은
+# 갤러리에 그대로 두고 그 뒤에 올린다. 0 이면 유예 없이 즉시 대상이 된다.
+# 통화녹취는 이 유예를 받지 않는다 — 폰에 남기므로 사라질 일이 없다.
+HOLD_DAYS=7
 RETENTION_DAYS=30
 MAX_ATTEMPTS=5
 DRY_RUN=0
@@ -108,6 +112,21 @@ log() {
 die() { log ERROR "$*"; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# termux-api 명령은 동반 앱(Termux:API)이 없거나 권한 대화상자에 답한 적이 없으면
+# 응답 없이 영영 매달린다. 더 나쁜 건 그동안 터미널에 입력한 것이 전부 그 명령의
+# stdin 으로 빨려 들어간다는 점이다 — 사용자 눈에는 명령이 실행도 안 되고 오류도
+# 없이 "아무 반응이 없는" 상태로만 보인다. 실기기에서 probe 가 이렇게 멈췄다.
+# 시간 제한을 걸고 stdin 을 끊어 둔다. 제한에 걸리면 실패로 취급되어, 매달리는
+# 대신 "권한 없음" 같은 정상 진단이 나간다.
+TAPI_TIMEOUT="${TAPI_TIMEOUT:-10}"
+tapi() {
+  if have timeout; then
+    timeout "$TAPI_TIMEOUT" "$@" < /dev/null
+  else
+    "$@" < /dev/null
+  fi
+}
 
 resolve_dir() { readlink -f "$1" 2>/dev/null || printf '%s' "$1"; }
 
@@ -173,7 +192,7 @@ human() {
 
 # 갤러리(MediaStore) 색인에서 사라지게 한다. termux-api가 없으면 조용히 넘어간다.
 media_scan() {
-  have termux-media-scan && termux-media-scan -f "$1" >/dev/null 2>&1
+  have termux-media-scan && tapi termux-media-scan -f "$1" >/dev/null 2>&1
   return 0
 }
 
@@ -184,7 +203,7 @@ md5_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
 notify() {
   local title="$1" body="$2"
   have termux-notification || return 0
-  termux-notification --id photo-autobackup --title "$title" --content "$body" \
+  tapi termux-notification --id photo-autobackup --title "$title" --content "$body" \
     --priority high >/dev/null 2>&1
   return 0
 }
@@ -221,7 +240,7 @@ wifi_ok() {
     log WARN "REQUIRE_WIFI=1이지만 termux-api가 없어 Wi-Fi 여부를 알 수 없다 (pkg install termux-api). 업로드를 보류한다."
     return 1
   fi
-  termux-wifi-connectioninfo 2>/dev/null | grep -q '"supplicant_state"[[:space:]]*:[[:space:]]*"COMPLETED"'
+  tapi termux-wifi-connectioninfo 2>/dev/null | grep -q '"supplicant_state"[[:space:]]*:[[:space:]]*"COMPLETED"'
 }
 
 # 파일이 아직 기록 중일 수 있으므로, 충분히 오래됐고 크기가 안정된 것만 다룬다.
@@ -234,6 +253,20 @@ is_stable() {
   sleep 1
   size2=$(stat -c %s "$f" 2>/dev/null) || return 1
   [ "$size1" = "$size2" ] && [ "$size1" -gt 0 ]
+}
+
+# 사진·동영상의 유예 기간이 지났는가. 유예 중인 것은 올리지도, 치우지도 않는다.
+# is_stable 이 "기록이 끝났나"를 보는 것과 달리 이건 "충분히 오래 두고 봤나"를 본다.
+past_hold() {
+  local f="$1" mtime now
+  case "$HOLD_DAYS" in
+    ''|*[!0-9]*) return 0 ;;   # 숫자가 아니면 유예를 걸지 않는다(설정 오타로 백업이 멈추면 안 된다)
+  esac
+  [ "$HOLD_DAYS" -gt 0 ] || return 0
+  # 시각을 못 읽으면 나이를 모른다. 모르는 채로 올려서 폰에서 치우지 않는다.
+  mtime=$(stat -c %Y "$f" 2>/dev/null) || return 1
+  now=$(date +%s)
+  [ $((now - mtime)) -ge $((HOLD_DAYS * 86400)) ]
 }
 
 # 실패 횟수 추적 — 망가진 파일 하나 때문에 매 주기마다 모바일 데이터를 태우지 않도록.
@@ -524,7 +557,7 @@ exclude_call_paths() {
 
 # ------------------------------------------------------------------ 한 번 훑기
 cmd_once() {
-  local f n_ok=0 n_skip=0 n_fail=0 attempts
+  local f n_ok=0 n_skip=0 n_fail=0 n_hold=0 attempts
   wifi_ok || { log INFO "Wi-Fi 대기 중 — 이번 주기는 건너뛴다"; return 0; }
   while IFS= read -r f; do
     [ -f "$f" ] || continue
@@ -532,6 +565,9 @@ cmd_once() {
     if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
       n_skip=$((n_skip + 1)); continue
     fi
+    # 유예 중인 것은 아예 손대지 않는다. is_stable 보다 먼저 걸러야 sleep 1 을
+    # 파일마다 물지 않는다 — 유예 중 파일이 대부분인 상태가 정상이다.
+    past_hold "$f" || { n_hold=$((n_hold + 1)); continue; }
     is_stable "$f" || { n_skip=$((n_skip + 1)); continue; }
     process_file "$f"; local prc=$?
     case $prc in
@@ -540,7 +576,11 @@ cmd_once() {
       *) record_failure "$f"; n_fail=$((n_fail + 1)) ;;
     esac
   done < <(collect_candidates)
-  log INFO "훑기 완료 — 처리 $n_ok건, 보류 $n_skip건, 실패 $n_fail건"
+  if [ "$n_hold" -gt 0 ]; then
+    log INFO "훑기 완료 — 처리 $n_ok건, 유예 $n_hold건(${HOLD_DAYS}일 미만), 보류 $n_skip건, 실패 $n_fail건"
+  else
+    log INFO "훑기 완료 — 처리 $n_ok건, 보류 $n_skip건, 실패 $n_fail건"
+  fi
   cmd_purge quiet
 }
 
@@ -556,12 +596,25 @@ cmd_migrate() {
   done
 
   list=$(mktemp)
-  discover_all | sort > "$list"
+  # 유예 중인 것은 계획에서부터 뺀다. 여기서 안 빼면 계획에 적힌 건수와 실제로
+  # 옮기는 건수가 어긋나, 사용자가 승인한 것과 다른 일이 벌어진다.
+  local all n_hold=0
+  all=$(mktemp)
+  discover_all | sort > "$all"
+  while IFS= read -r f; do
+    if past_hold "$f"; then printf '%s\n' "$f"
+    else n_hold=$((n_hold + 1)); fi
+  done < "$all" > "$list"
+  rm -f "$all"
   count=$(wc -l < "$list" | tr -d ' ')
 
   if [ "$count" = "0" ]; then
     rm -f "$list"
-    log INFO "옮길 사진이 없다. 폰이 이미 비어 있다."
+    if [ "$n_hold" -gt 0 ]; then
+      log INFO "옮길 것이 없다. ${n_hold}건은 아직 유예 중이다(${HOLD_DAYS}일 미만)."
+    else
+      log INFO "옮길 사진이 없다. 폰이 이미 비어 있다."
+    fi
     return 0
   fi
 
@@ -580,6 +633,9 @@ cmd_migrate() {
   echo "사진 →    : $RCLONE_REMOTE:$DRIVE_FOLDER/"
   if [ "$v_n" -gt 0 ]; then
     echo "동영상 →  : $RCLONE_REMOTE:$VIDEO_DRIVE_FOLDER/"
+  fi
+  if [ "$n_hold" -gt 0 ]; then
+    echo "유예 제외 : ${n_hold}건 (찍은 지 ${HOLD_DAYS}일이 안 됐다. 폰에 그대로 둔다)"
   fi
   echo "정리 방식 : 폰 폴더 구조 그대로"
   echo "삭제 방식 : 검증 성공한 것만 휴지통으로 이동 (${RETENTION_DAYS}일 보관 후 완전 삭제)"
@@ -609,8 +665,8 @@ cmd_migrate() {
 
   wifi_ok || { rm -f "$list"; die "Wi-Fi 연결을 기다리는 중이라 이관을 시작하지 않는다."; }
 
-  have termux-wake-lock && termux-wake-lock
-  trap 'have termux-wake-unlock && termux-wake-unlock; log WARN "이관이 중단됐다. migrate 를 다시 실행하면 남은 것부터 이어서 한다."; exit 130' INT TERM
+  have termux-wake-lock && tapi termux-wake-lock
+  trap 'have termux-wake-unlock && tapi termux-wake-unlock; log WARN "이관이 중단됐다. migrate 를 다시 실행하면 남은 것부터 이어서 한다."; exit 130' INT TERM
   log INFO "일괄 이관 시작 — ${count}건 / $(human "$bytes")"
   local i=0
   while IFS= read -r f; do
@@ -638,7 +694,7 @@ cmd_migrate() {
       log INFO "진행 $i/$count (성공 $n_ok, 실패 $n_fail)"
     fi
   done < "$list"
-  have termux-wake-unlock && termux-wake-unlock
+  have termux-wake-unlock && tapi termux-wake-unlock
   rm -f "$list"
 
   log INFO "일괄 이관 종료 — 성공 $n_ok건, 실패 $n_fail건"
@@ -657,13 +713,27 @@ cmd_migrate() {
 
 # ------------------------------------------------- 폰에 사진이 남았는지 최종 확인
 cmd_verify_empty() {
-  local left
-  left=$(discover_all | wc -l | tr -d ' ')
+  local left all f n_hold=0
+  # 유예 중인 파일은 "남아 있는" 게 아니라 "아직 올릴 때가 아닌" 것이다. 둘을
+  # 뭉뚱그리면 정상 상태가 실패로 보고돼, 사용자가 없는 문제를 쫓게 된다.
+  all=$(mktemp)
+  discover_all > "$all"
+  left=0
+  while IFS= read -r f; do
+    if past_hold "$f"; then left=$((left + 1)); else n_hold=$((n_hold + 1)); fi
+  done < "$all"
+  rm -f "$all"
+
   if [ "$left" = "0" ]; then
-    echo "확인: 폰에 남은 사진이 없다. (검사 범위: $MIGRATE_ROOTS)"
+    if [ "$n_hold" -gt 0 ]; then
+      echo "확인: 올릴 때가 된 사진은 폰에 없다. ${n_hold}건은 유예 중이다(${HOLD_DAYS}일 미만)."
+    else
+      echo "확인: 폰에 남은 사진이 없다. (검사 범위: $MIGRATE_ROOTS)"
+    fi
     return 0
   fi
   echo "확인: 아직 ${left}건이 폰에 남아 있다."
+  [ "$n_hold" -gt 0 ] && echo "      (그 밖에 ${n_hold}건은 유예 중이라 셈에서 뺐다)"
   echo "남은 위치:"
   discover_all | sed 's|/[^/]*$||' | sort | uniq -c | sort -rn | head -20 \
     | awk '{c=$1; $1=""; sub(/^ /,""); printf "  %6d건  %s\n", c, $0}'
@@ -677,8 +747,8 @@ cmd_verify_empty() {
 
 # --------------------------------------------------------------------- 감시 모드
 cmd_watch() {
-  have termux-wake-lock && termux-wake-lock
-  trap 'have termux-wake-unlock && termux-wake-unlock; exit 0' INT TERM
+  have termux-wake-lock && tapi termux-wake-lock
+  trap 'have termux-wake-unlock && tapi termux-wake-unlock; exit 0' INT TERM
   log INFO "감시 시작 (v$VERSION, 주기 ${POLL_SECONDS}s, 대상: $WATCH_DIRS)"
   while :; do
     cmd_once
@@ -913,6 +983,7 @@ $([ -n "${TRASH_DIR:-}" ] && [ "$TRASH_DIR" != "$STATE_DIR/trash" ] && printf 'T
 $([ -n "${LOG_FILE:-}" ] && [ "$LOG_FILE" != "$STATE_DIR/autobackup.log" ] && printf 'LOG_FILE="%s"' "$LOG_FILE")
 MIN_AGE_SECONDS=$MIN_AGE_SECONDS
 POLL_SECONDS=$POLL_SECONDS
+HOLD_DAYS=$HOLD_DAYS
 RETENTION_DAYS=$RETENTION_DAYS
 MAX_ATTEMPTS=$MAX_ATTEMPTS
 REQUIRE_WIFI=$REQUIRE_WIFI
@@ -1045,7 +1116,7 @@ load_call_log() {
     age=$(( $(date +%s) - $(stat -c %Y "$CALL_LOG_CACHE" 2>/dev/null || echo 0) ))
     [ "$age" -le "$CALL_LOG_TTL" ] && [ -s "$CALL_LOG_CACHE" ] && return 0
   fi
-  termux-call-log -l 50 > "$CALL_LOG_CACHE.tmp" 2>/dev/null || { rm -f "$CALL_LOG_CACHE.tmp"; return 1; }
+  tapi termux-call-log -l 50 > "$CALL_LOG_CACHE.tmp" 2>/dev/null || { rm -f "$CALL_LOG_CACHE.tmp"; return 1; }
   mv "$CALL_LOG_CACHE.tmp" "$CALL_LOG_CACHE"
   return 0
 }
@@ -1281,7 +1352,7 @@ cmd_probe() {
 
   echo "[5] 통화기록 API (파일명으로 판정 안 될 때 쓰는 수단)"
   if have termux-call-log; then
-    if termux-call-log -l 1 >/dev/null 2>&1; then
+    if tapi termux-call-log -l 1 >/dev/null 2>&1; then
       echo "  [OK] 사용 가능 — 파일명에 수신/발신이 없어도 시각 대조로 판정한다"
     else
       echo "  [실패] 명령은 있으나 권한이 없다."
@@ -1454,7 +1525,7 @@ cmd_doctor() {
   if [ "$REQUIRE_WIFI" = "1" ]; then
     if ! have termux-wifi-connectioninfo; then
       echo "  [실패] REQUIRE_WIFI=1인데 termux-api가 없어 업로드가 계속 보류된다"; ok=0
-    elif termux-wifi-connectioninfo >/dev/null 2>&1; then
+    elif tapi termux-wifi-connectioninfo >/dev/null 2>&1; then
       echo "  [OK] Wi-Fi 전용 모드 판정 가능"
     else
       # 명령이 있어도 위치 권한이 없으면 실패한다. 존재만 보고 [OK] 를 찍으면
@@ -1478,13 +1549,20 @@ cmd_doctor() {
 
 # ------------------------------------------------------------------------ 현황
 cmd_status() {
-  local pending trashed everything
+  local pending trashed everything f ready=0 held=0 tmpl
   pending=$(collect_candidates | wc -l | tr -d ' ')
   everything=$(discover_all | wc -l | tr -d ' ')
   trashed=$(find "$TRASH_DIR" -type f ! -name 'manifest.tsv' 2>/dev/null | wc -l | tr -d ' ')
+  # 감시 대기 건수만 보면 유예 때문에 안 올라가는 것을 고장으로 오해한다.
+  tmpl=$(mktemp); collect_candidates > "$tmpl"
+  while IFS= read -r f; do
+    if past_hold "$f"; then ready=$((ready + 1)); else held=$((held + 1)); fi
+  done < "$tmpl"
+  rm -f "$tmpl"
   echo "리모트          : $RCLONE_REMOTE:$DRIVE_FOLDER"
   echo "감시 폴더       : $WATCH_DIRS"
-  echo "감시 대기       : ${pending}건"
+  echo "감시 대기       : ${pending}건 (올릴 차례 ${ready} / 유예 중 ${held})"
+  echo "업로드 유예     : ${HOLD_DAYS}일 (찍은 지 이만큼 지나야 올린다)"
   echo "폰 전체 사진    : ${everything}건 (검사 범위: $MIGRATE_ROOTS)"
   echo "휴지통          : ${trashed}건 (보관 ${RETENTION_DAYS}일, $(du -sh "$TRASH_DIR" 2>/dev/null | cut -f1))"
   echo "누적 백업       : $(($(wc -l < "$MANIFEST") - 1))건"

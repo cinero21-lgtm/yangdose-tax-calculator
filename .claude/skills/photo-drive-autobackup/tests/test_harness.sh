@@ -55,6 +55,10 @@ RCLONE_REMOTE="gdrive"
 DRIVE_FOLDER="PhoneCamera"
 WATCH_DIRS="$HOME/storage/dcim/Camera"
 MIN_AGE_SECONDS=0
+# 유예는 기본 시험에서 끈다. 시험 파일은 방금 만든 것이라 유예가 켜져 있으면
+# 전부 걸러져, 정작 보려는 업로드·삭제 동작이 하나도 안 돈다. 유예 자체는
+# 94번 시험에서 따로 켜서 확인한다.
+HOLD_DAYS=0
 RETENTION_DAYS=30
 CFG
 export PHOTO_AUTOBACKUP_CONFIG="$HOME/.config/photo-autobackup/config.env"
@@ -1069,6 +1073,79 @@ out=$(CURLSRC="$ROOT/newer3.sh" UPDATE_URL="http://bad/pab.sh http://good/pab.sh
 check "죽은 주소를 건너뛴다"      1 "$(echo "$out" | grep -c '다음 주소를 시도한다')"
 check "다음 주소로 갱신 성공"     1 "$(echo "$out" | grep -c 'v97.0.0')"
 rm -f "$ROOT/bin/curl" "$ROOT/bin/pab-to.sh" "$ROOT/bin/pab-to.sh.bak" "$ROOT/newer3.sh" "$CURLLOG"
+
+echo "== 94. 업로드 유예(HOLD_DAYS) — 갓 찍은 것은 건드리지 않는다 =="
+# 찍자마자 올려서 폰에서 치우면, 정작 방금 찍은 걸 보려 할 때 없다.
+rm -f "$CAM"/* 2>/dev/null
+echo "fresh" > "$CAM/HOLD_new.jpg"                       # 방금 찍은 것
+echo "old"   > "$CAM/HOLD_old.jpg"
+touch -d '10 days ago' "$CAM/HOLD_old.jpg"               # 유예가 지난 것
+
+out=$(HOLD_DAYS=7 "$SKILL/scripts/photo-autobackup.sh" once 2>&1)
+check "유예 중인 원본은 폰에 남는다"   1 "$([ -f "$CAM/HOLD_new.jpg" ] && echo 1 || echo 0)"
+check "유예 중인 것은 안 올라간다"     0 "$(find "$ROOT/remote" -name 'HOLD_new.jpg' | wc -l | tr -d ' ')"
+check "유예 지난 것은 올라간다"        1 "$(find "$ROOT/remote" -name 'HOLD_old.jpg' | wc -l | tr -d ' ')"
+check "유예 지난 원본은 치워진다"      0 "$([ -f "$CAM/HOLD_old.jpg" ] && echo 1 || echo 0)"
+check "유예 건수를 보고한다"           1 "$(echo "$out" | grep -c '유예 1건')"
+
+# 유예가 지나면 그때 올라가야 한다 — 영영 안 올라가면 백업이 아니다
+touch -d '10 days ago' "$CAM/HOLD_new.jpg"
+HOLD_DAYS=7 "$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "유예가 지나면 올라간다"         1 "$(find "$ROOT/remote" -name 'HOLD_new.jpg' | wc -l | tr -d ' ')"
+
+# HOLD_DAYS=0 이면 유예 없이 즉시 — 기존 동작이 그대로 남아 있어야 한다
+echo "now" > "$CAM/HOLD_zero.jpg"
+HOLD_DAYS=0 "$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "0이면 즉시 올린다"              1 "$(find "$ROOT/remote" -name 'HOLD_zero.jpg' | wc -l | tr -d ' ')"
+
+# 설정 오타로 백업이 통째로 멈추면 안 된다
+echo "junk" > "$CAM/HOLD_junk.jpg"
+HOLD_DAYS="이레" "$SKILL/scripts/photo-autobackup.sh" once >/dev/null 2>&1
+check "숫자가 아니면 유예를 안 건다"   1 "$(find "$ROOT/remote" -name 'HOLD_junk.jpg' | wc -l | tr -d ' ')"
+
+# verify-empty / migrate 는 감시 폴더가 아니라 MIGRATE_ROOTS($SHARED)를 훑는다
+rm -f "$CAM"/* 2>/dev/null
+rm -rf "$SHARED/HoldT"; mkdir -p "$SHARED/HoldT"
+echo "fresh2" > "$SHARED/HoldT/HOLD_pend.jpg"
+out=$(HOLD_DAYS=7 "$SKILL/scripts/photo-autobackup.sh" verify-empty 2>&1); vrc=$?
+check "verify-empty 가 성공으로 끝난다" 0 "$vrc"
+check "유예 중임을 밝힌다"              1 "$(echo "$out" | grep -c '유예 중')"
+
+# migrate 계획의 건수와 실제 대상이 어긋나면, 승인한 것과 다른 일이 벌어진다
+echo "mig_old" > "$SHARED/HoldT/HOLD_mig.jpg"
+touch -d '10 days ago' "$SHARED/HoldT/HOLD_mig.jpg"
+out=$(HOLD_DAYS=7 DRY_RUN=1 "$SKILL/scripts/photo-autobackup.sh" migrate 2>&1)
+check "계획 대상은 유예 지난 1건"      1 "$(echo "$out" | grep -c '대상 파일 : 1건')"
+check "계획이 유예 제외를 밝힌다"      1 "$(echo "$out" | grep -c '유예 제외 : 1건')"
+rm -rf "$SHARED/HoldT"; rm -f "$CAM"/* 2>/dev/null
+
+# 배포용 설정에도 같은 키가 있어야 한다(설치본에만 유예가 없는 사고를 막는다)
+check "config.example.env 에 HOLD_DAYS" 1 "$(grep -c '^HOLD_DAYS=' "$SKILL/scripts/config.example.env")"
+
+echo "== 95. 응답 없는 termux-api 가 명령 전체를 붙잡지 않는다 =="
+# 실기기에서 probe 가 [2] 까지 찍고 멈췄다. Termux:API 동반 앱이 없으면
+# termux-call-log 가 영영 응답하지 않고, 그동안 터미널에 친 것은 전부 그 명령의
+# stdin 으로 빨려 들어간다. 사용자에게는 "무엇을 쳐도 반응이 없다"로만 보인다.
+cat > "$ROOT/bin/termux-call-log" <<'HANG'
+#!/bin/bash
+cat > /dev/null   # 터미널 입력을 빨아들인다 — 실기기에서 벌어진 일 그대로
+sleep 60
+HANG
+chmod 755 "$ROOT/bin/termux-call-log"
+
+t0=$(date +%s)
+out=$(TAPI_TIMEOUT=2 timeout 30 "$SKILL/scripts/photo-autobackup.sh" probe 2>&1); prc=$?
+t1=$(date +%s)
+
+check "probe 가 끝까지 실행된다"       1 "$(echo "$out" | grep -c '\[6\] 현재 설정')"
+check "매달리지 않고 반환한다"         1 "$([ "$prc" != 124 ] && echo 1 || echo 0)"
+check "제한 시간 안에 끝난다"          1 "$([ $((t1 - t0)) -lt 25 ] && echo 1 || echo 0)"
+check "권한 문제로 진단된다"           1 "$(echo "$out" | grep -c '\[실패\]')"
+
+# 입력을 삼키지 않아야 한다 — 파이프로 준 것이 그대로 남아 다음 명령이 읽어야 한다
+got=$( { TAPI_TIMEOUT=2 timeout 30 "$SKILL/scripts/photo-autobackup.sh" probe >/dev/null 2>&1; cat; } <<< "SENTINEL-입력-보존" )
+check "표준입력을 삼키지 않는다"       1 "$(echo "$got" | grep -c 'SENTINEL-입력-보존')"
+rm -f "$ROOT/bin/termux-call-log"
 
 echo
 echo "합계: PASS=$pass FAIL=$fail"
