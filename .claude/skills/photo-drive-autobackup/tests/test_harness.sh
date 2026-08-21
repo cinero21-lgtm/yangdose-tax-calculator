@@ -1686,6 +1686,46 @@ rm -rf "$SHARED/Recordings" "$SHARED/Drop"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
 echo
+echo "== 117. 앱이 붙이는 '_original' 꼬리표를 넘어 시각을 읽는다 =="
+# 폰 실측: 공유로 내보낸 전사는 녹음 이름 뒤에 꼬리표가 하나 더 붙는다.
+#   녹음   통화 01075907672_260820_181242.m4a
+#   전사   통화 01075907672_260820_181242_original.txt
+# 끝 고정만 걸어 두면 이걸 '시각 없음'으로 흘려보낸다 — 경로는 뚫렸는데
+# 코드가 못 받는 상태였다. 꼬리표를 허용하되 전화번호 오인은 그대로 막는다.
+rm -rf "$SHARED/Recordings" "$SHARED/Drop"; mkdir -p "$SHARED/Recordings/Call" "$SHARED/Drop"
+CALLDIR="$SHARED/Recordings/Call"
+printf 'audioA' > "$CALLDIR/통화 01075907672_260820_181242.m4a"
+# 전화번호 뒷자리가 가짜 시각으로 걸리던 자리. 꼬리표를 허용해도 여기는 막혀야 한다.
+printf 'audioB' > "$CALLDIR/통화 01011112222_260820_112710.m4a"
+printf '전사본문ORIG' > "$SHARED/Drop/통화 01075907672_260820_181242_original.txt"
+# 꼬리표에 숫자가 섞이면 시각으로 인정하지 않는다 — 추측하지 않는다.
+printf '버전2'        > "$SHARED/Drop/통화 01011112222_260820_112710_v2.txt"
+
+T=(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" TRANSCRIPT_DROP_DIRS="$SHARED/Drop" \
+   "$SKILL/scripts/photo-autobackup.sh" transcripts)
+
+out=$("${T[@]}" 2>&1)
+check "_original 을 자동으로 짝짓는다" 1 "$([ -f "$CALLDIR/통화 01075907672_260820_181242.txt" ] && echo 1 || echo 0)"
+check "_original 내용이 보존된다"      1 "$(grep -c '전사본문ORIG' "$CALLDIR/통화 01075907672_260820_181242.txt" 2>/dev/null || echo 0)"
+check "숫자 낀 꼬리표는 시각이 아니다" 1 "$(echo "$out" | grep -c '녹음 시각(YYMMDD_HHMMSS)이 없다')"
+# 전화번호 오인이 살아나면 112222_260820 을 열쇠로 잡아 엉뚱한 짝이 생기거나
+# 아무 짝도 못 찾는다. 저 녹음에는 어떤 전사도 붙으면 안 된다.
+check "전화번호를 시각으로 오인 안 한다" 0 "$([ -f "$CALLDIR/통화 01011112222_260820_112710.txt" ] && echo 1 || echo 0)"
+# 짝이 생겼으므로 그 녹음은 '아직 전사가 없는 녹음' 목록에서 빠져야 한다.
+check "짝지은 녹음은 목록에서 빠진다"  0 "$(echo "$out" | grep -c '^  260820_181242  ')"
+check "짝 없는 녹음은 목록에 남는다"   1 "$(echo "$out" | grep -c '^  260820_112710  ')"
+
+# pair 도 같은 함수를 쓰므로 시각만으로 찾을 때 꼬리표 파일을 받아들여야 한다.
+rm -f "$CALLDIR/통화 01075907672_260820_181242.txt"
+out=$(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" \
+      "$SKILL/scripts/photo-autobackup.sh" transcripts pair \
+      "$SHARED/Drop/통화 01075907672_260820_181242_original.txt" 260820_181242 2>&1)
+check "pair 도 꼬리표 파일을 받는다"   1 "$([ -f "$CALLDIR/통화 01075907672_260820_181242.txt" ] && echo 1 || echo 0)"
+
+rm -rf "$SHARED/Recordings" "$SHARED/Drop"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
+echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
 [ "$fail" = "0" ]
