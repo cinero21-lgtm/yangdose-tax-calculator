@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.13.0"
+VERSION="2.14.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -1264,7 +1264,10 @@ transcript_drop_dirs() {
     done < <(printf '%s\n' "$TRANSCRIPT_DROP_DIRS")
   else
     shared=$(resolve_dir "$HOME/storage/shared")
-    for d in "$shared/Download" "$shared/Documents"; do
+    # Download/KakaoTalk 은 실측으로 확인된 경로다: 녹음 앱 공유 → 카카오톡
+    # 나와의 채팅 → 파일 꾹 눌러 저장 이 여기로 떨어진다. 폰에서 find 로 뒤져
+    # 알아냈다 — 다음 사람은 설정 없이 바로 잡히게 기본에 넣는다.
+    for d in "$shared/Download" "$shared/Download/KakaoTalk" "$shared/Documents"; do
       [ -d "$d" ] && printf '%s\n' "$d"
     done
   fi

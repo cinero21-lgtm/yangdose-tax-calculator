@@ -183,7 +183,8 @@ Gemini 에게 시키는 것을 잊을 수 있으므로, **사람이 주기적으
 photo-autobackup.sh transcripts            # 아직 전사가 없는 녹음이 뜬다
 #   → 그 목록을 보고, 앱에서 해당 녹음을 열어
 #     ⋮ → 공유 → 카카오톡 → 나와의 채팅 → 보내기
-#   → 채팅방에서 *_original.txt 만 폰에 저장
+#   → 채팅방에서 *_original.txt 를 꾹 눌러 저장
+#     (Download/KakaoTalk 에 떨어진다 — 실측. 기본 탐색 경로에 들어 있다)
 photo-autobackup.sh transcripts --upload   # 짝지어서 드라이브까지 올린다
 ```
 
@@ -197,8 +198,13 @@ photo-autobackup.sh transcripts pair "$HOME/storage/shared/Download/서류 제�
 녹음에 남의 통화 내용이 달린 채 드라이브로 올라가는 쪽이 훨씬 나쁘기 때문이다.
 같은 이유로 이미 전사 짝이 있는 녹음에는 `pair` 가 덮어쓰지 않는다.
 
-내보낸 파일이 떨어지는 폴더가 `Download`·`Documents` 가 아니면
-`TRANSCRIPT_DROP_DIRS` 에 적는다.
+내보낸 파일이 떨어지는 폴더가 `Download`·`Download/KakaoTalk`·`Documents` 가
+아니면 `TRANSCRIPT_DROP_DIRS` 에 적는다. 어디 떨어졌는지 모르겠으면 최근
+파일을 훑는다:
+
+```sh
+find /storage/emulated/0 -type f -mmin -180 2>/dev/null | head -40
+```
 
 ## 켜기
 

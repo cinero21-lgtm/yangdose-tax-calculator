@@ -1726,6 +1726,26 @@ rm -rf "$SHARED/Recordings" "$SHARED/Drop"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
 echo
+echo "== 118. 설정 없이도 카톡 저장 폴더(Download/KakaoTalk)를 본다 =="
+# 실측: 녹음 앱 공유 → 카카오톡 나와의 채팅 → 파일 꾹 눌러 저장 은
+# Download/KakaoTalk 에 떨어진다. Download 만 보던 탓에 사용자가 find 로
+# 폴더를 직접 찾아야 했다. 기본 탐색 경로에 넣어 설정 없이 잡히게 한다.
+rm -rf "$SHARED/Recordings" "$SHARED/Download"; mkdir -p "$SHARED/Recordings/Call" "$SHARED/Download/KakaoTalk"
+CALLDIR="$SHARED/Recordings/Call"
+printf 'audioK' > "$CALLDIR/통화 01075907672_260820_181242.m4a"
+printf '카톡전사' > "$SHARED/Download/KakaoTalk/통화 01075907672_260820_181242_original.txt"
+
+# TRANSCRIPT_DROP_DIRS 를 비워 기본 경로만으로 돌린다.
+out=$(env CALL_ENABLED=1 CALL_DIRS="$CALLDIR" TRANSCRIPT_DROP_DIRS="" \
+      "$SKILL/scripts/photo-autobackup.sh" transcripts 2>&1)
+check "찾는 곳에 KakaoTalk 이 있다"    1 "$(echo "$out" | grep -c 'Download/KakaoTalk')"
+check "카톡 저장본을 자동으로 짝짓는다" 1 "$([ -f "$CALLDIR/통화 01075907672_260820_181242.txt" ] && echo 1 || echo 0)"
+check "내용이 보존된다"                1 "$(grep -c '카톡전사' "$CALLDIR/통화 01075907672_260820_181242.txt" 2>/dev/null || echo 0)"
+
+rm -rf "$SHARED/Recordings" "$SHARED/Download"
+"$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
+
+echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
 [ "$fail" = "0" ]
