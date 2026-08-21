@@ -13,7 +13,7 @@ fi
 
 set -uo pipefail
 
-VERSION="2.14.0"
+VERSION="2.15.0"
 CONFIG_FILE="${PHOTO_AUTOBACKUP_CONFIG:-$HOME/.config/photo-autobackup/config.env}"
 
 # ------------------------------------------------- 환경변수 우선 (기본값보다 먼저)
@@ -2136,6 +2136,59 @@ cmd_status() {
   tail -n 10 "$LOG_FILE" 2>/dev/null | sed 's/^/  /'
 }
 
+# ------------------------------------------------- 자체 client_id 를 심는다
+# rclone 공용 client_id 는 2026년 중 폐지된다. 구글 콘솔에서 만든 값 두 개를
+# 받아 rclone 설정에 넣고 재인증까지 끌고 간다. `rclone config` 의 대화식
+# 메뉴를 사람이 헤매지 않도록, 설정 파일을 직접 고친다(고치기 전에 .bak).
+cmd_client_id() {
+  local id="${1:-}" sec="${2:-}" conf tmp
+  if [ -z "$id" ] || [ -z "$sec" ]; then
+    echo "사용법: photo-autobackup.sh client-id <client_id> <client_secret>"
+    echo "  값 두 개는 구글 클라우드 콘솔에서 만든다:"
+    echo "  https://rclone.org/drive/#making-your-own-client-id"
+    return 1
+  fi
+  # 두 값을 뒤바꿔 넣거나 다른 것을 붙여넣는 실수가 제일 흔하다. 꼴부터 본다.
+  case "$id" in
+    *.apps.googleusercontent.com) ;;
+    *) echo "client_id 꼴이 아니다 — '….apps.googleusercontent.com' 으로 끝나야 한다."
+       echo "받은 값: $id"
+       return 1 ;;
+  esac
+  case "$sec" in
+    GOCSPX-*) ;;
+    *) echo "client_secret 꼴이 아니다 — 'GOCSPX-' 로 시작해야 한다."
+       echo "받은 값: $sec"
+       return 1 ;;
+  esac
+  conf=$(rclone config file 2>/dev/null | tail -n 1)
+  [ -n "$conf" ] && [ -f "$conf" ] || { echo "rclone 설정 파일을 못 찾았다."; return 1; }
+  grep -qF "[$RCLONE_REMOTE]" "$conf" || { echo "리모트 [$RCLONE_REMOTE] 가 설정에 없다: $conf"; return 1; }
+  cp "$conf" "$conf.bak"
+  tmp=$(mktemp)
+  # [gdrive] 절 안의 기존 client_id/client_secret 만 걷어내고 새 값을 절 머리에 심는다.
+  awk -v sect="[$RCLONE_REMOTE]" -v id="$id" -v sec="$sec" '
+    $0 == sect { print; print "client_id = " id; print "client_secret = " sec; insec=1; next }
+    /^\[/ { insec=0 }
+    insec && ($1 == "client_id" || $1 == "client_secret") { next }
+    { print }
+  ' "$conf" > "$tmp" && mv "$tmp" "$conf"
+  echo "설정에 넣었다 (이전본: $conf.bak)"
+  echo
+  echo "이제 구글 재인증이다. 브라우저가 열리면 드라이브 계정을 고르고 '허용'을 눌러라."
+  echo "('확인되지 않은 앱' 경고가 나오면 [고급] → [이동] 으로 진행한다 — 본인이 만든 앱이다)"
+  rclone config reconnect "$RCLONE_REMOTE:" --auto-confirm
+  echo
+  if rclone lsd "$RCLONE_REMOTE:" >/dev/null 2>&1; then
+    echo "확인 완료 — 새 client_id 로 드라이브에 접속된다."
+    echo "공용 할당량을 벗어났으니 업로드 속도도 나아지고, 2026년 공용 키 폐지와 무관해졌다."
+  else
+    echo "드라이브 접속 확인 실패. 재인증만 다시: rclone config reconnect $RCLONE_REMOTE: --auto-confirm"
+    echo "원상복구: cp \"$conf.bak\" \"$conf\""
+    return 1
+  fi
+}
+
 usage() {
   cat <<'USAGE'
 사용법: photo-autobackup.sh <명령>
@@ -2149,6 +2202,9 @@ usage() {
   transcripts pair <전사파일> <녹음|시각>
                    이름에 시각이 없는 전사(삼성 노트를 거친 것)를 손으로 붙인다
   update           스크립트를 최신본으로 갱신 (긴 URL 붙여넣기 불필요)
+  client-id <id> <secret>
+                   구글 콘솔에서 만든 자체 client_id 를 심고 재인증한다
+                   (공용 키는 2026년 중 폐지 — doctor 가 경고하는 그것)
   perm             권한만 짧게 점검하고, 필요한 설정 화면을 폰에 띄운다
   setup [사진폴더] [동영상폴더]
                    폰 상태를 읽어 설정을 자동으로 맞추고, 고칠 수 있는 건 고친다.
@@ -2175,6 +2231,7 @@ main() {
     transcripts)    shift; cmd_transcripts "$@" ;;
     calls)          cmd_calls ;;
     update)         cmd_update ;;
+    client-id)      shift; cmd_client_id "${1:-}" "${2:-}" ;;
     perm)           cmd_perm ;;
     setup)          shift; cmd_setup "${1:-}" "${2:-}" ;;
     migrate)        shift; cmd_migrate "$@" ;;

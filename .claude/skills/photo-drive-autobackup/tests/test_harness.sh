@@ -1746,6 +1746,68 @@ rm -rf "$SHARED/Recordings" "$SHARED/Download"
 "$SKILL/scripts/photo-autobackup.sh" reset-failures >/dev/null 2>&1
 
 echo
+echo "== 119. client-id: 자체 client_id 를 심고 재인증까지 끌고 간다 =="
+# 공용 client_id 는 2026년 중 폐지된다. rclone config 의 대화식 메뉴를 사람이
+# 헤매지 않도록 설정 파일을 직접 고치는 명령이다. 제일 흔한 실수(두 값 뒤바꿈,
+# 엉뚱한 것 붙여넣기)를 꼴 검사로 막고, 고치기 전 .bak 을 남긴다.
+RCONF="$ROOT/rclone.conf"
+cat > "$RCONF" <<'CONF'
+[other]
+type = drive
+client_id = old-other
+
+[gdrive]
+type = drive
+client_id = stale-id
+client_secret = stale-secret
+token = {"access_token":"x"}
+CONF
+cp "$ROOT/bin/rclone" "$ROOT/rclone.orig"
+cat > "$ROOT/bin/rclone" <<'RC3'
+#!/usr/bin/env bash
+cmd="$1"; shift
+case "$cmd" in
+  config)
+    case "$1" in
+      file) echo "Configuration file is stored at:"; echo "$RCLONE_CONF_PATH" ;;
+      reconnect) echo "reconnect $2 $3" >> "$RCLONE_CALL_LOG" ;;
+    esac ;;
+  lsd) [ "${RCLONE_LSD_FAIL:-0}" = "1" ] && exit 1; exit 0 ;;
+  *) exit 0 ;;
+esac
+RC3
+chmod 755 "$ROOT/bin/rclone"
+export RCLONE_CONF_PATH="$RCONF" RCLONE_CALL_LOG="$ROOT/rclone-calls.log"
+: > "$RCLONE_CALL_LOG"
+
+GOODID="12345-abc.apps.googleusercontent.com"
+GOODSEC="GOCSPX-verysecret"
+
+# 꼴이 틀리면 아무것도 건드리지 않는다
+out=$("$SKILL/scripts/photo-autobackup.sh" client-id "notanid" "$GOODSEC" 2>&1; echo "rc=$?")
+check "엉뚱한 id 는 거부한다"          1 "$(echo "$out" | grep -c 'client_id 꼴이 아니다')"
+check "그때 설정을 안 건드린다"        1 "$(grep -c 'stale-id' "$RCONF")"
+out=$("$SKILL/scripts/photo-autobackup.sh" client-id "$GOODID" "whatever" 2>&1; echo "rc=$?")
+check "엉뚱한 secret 도 거부한다"      1 "$(echo "$out" | grep -c 'client_secret 꼴이 아니다')"
+
+out=$("$SKILL/scripts/photo-autobackup.sh" client-id "$GOODID" "$GOODSEC" 2>&1; echo "rc=$?")
+check "성공으로 끝난다"                1 "$(echo "$out" | grep -c '^rc=0$')"
+check "새 client_id 가 들어갔다"       1 "$(grep -c "client_id = $GOODID" "$RCONF")"
+check "옛 값은 걷어냈다(중복 없음)"    1 "$(grep -c '^client_id' <(sed -n '/^\[gdrive\]/,/^\[/p' "$RCONF"))"
+check "다른 리모트는 안 건드린다"      1 "$(grep -c 'client_id = old-other' "$RCONF")"
+check "token 줄은 남겨 둔다"           1 "$(grep -c '^token' "$RCONF")"
+check "고치기 전 백업을 남긴다"        1 "$([ -f "$RCONF.bak" ] && grep -c 'stale-id' "$RCONF.bak" || echo 0)"
+check "재인증을 실제로 부른다"         1 "$(grep -c 'reconnect gdrive:' "$RCLONE_CALL_LOG")"
+
+# 재인증이 실패로 끝나면 성공이라 말하지 않고 복구 길을 알려준다
+out=$(env RCLONE_LSD_FAIL=1 "$SKILL/scripts/photo-autobackup.sh" client-id "$GOODID" "$GOODSEC" 2>&1; echo "rc=$?")
+check "접속 확인 실패면 실패로 끝난다" 1 "$(echo "$out" | grep -c '^rc=1$')"
+check "복구 명령을 알려준다"           1 "$(echo "$out" | grep -c '원상복구')"
+
+mv "$ROOT/rclone.orig" "$ROOT/bin/rclone"      # 공용 스텁을 되돌린다
+unset RCLONE_CONF_PATH RCLONE_CALL_LOG
+
+echo
 echo "합계: PASS=$pass FAIL=$fail"
 rm -rf "$ROOT"
 [ "$fail" = "0" ]
