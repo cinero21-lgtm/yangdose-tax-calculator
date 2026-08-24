@@ -1542,13 +1542,14 @@ cmd_calls() {
     log INFO "전사 파일을 하나도 찾지 못했다. 앱이 텍스트를 파일로 저장하지 않거나 다른 위치일 수 있다 — probe 로 확인해라."
   fi
 
-  # 전사를 자동으로 못 가져오는 기기에서는 사람이 드라이브에서 Gemini 에게 시켜야
-  # 하는데, 그걸 잊는 것이 실제 실패 지점이다. 로그는 아무도 안 보므로 알림을 띄운다.
+  # 드라이브에 연동된 Gemini는 통화 녹음 파일을 전사하지 않는다(구글 공지로 확정).
+  # 전사가 필요하면 사람이 앱에서 직접 공유해 내보내야 하는데, 그걸 잊는 것이
+  # 실제 실패 지점이다. 로그는 아무도 안 보므로 알림을 띄운다.
   # 새로 올라간 것이 있을 때만 띄운다 — 매 주기 뜨면 사람이 알림을 꺼 버리고,
   # 그러면 이 대책 자체가 통째로 무효가 된다.
   if [ "$n_up" -gt 0 ] && [ "$seen_tr" = "0" ]; then
     notify "통화녹취 ${n_up}건 업로드" \
-           "드라이브에서 Gemini 에게 전사를 요청하세요 → $CALL_DRIVE_IN / $CALL_DRIVE_OUT"
+           "전사가 필요하면 앱에서 공유 → 카카오톡 → transcripts --upload"
   elif [ "$n_up" -gt 0 ]; then
     notify "통화녹취 ${n_up}건 업로드" "전사 ${n_tr}건 포함"
   fi
@@ -1633,7 +1634,8 @@ cmd_probe() {
       echo "  → 이 폴더를 CALL_DIRS 에 더하면 자동 업로드에 함께 실린다."
     else
       echo "  폰 어디에도 파일로는 없다. 앱이 전사를 앱 내부에만 두는 것이다."
-      echo "  → 정해진 방침: 녹취(음성)를 드라이브에 올리고 전사는 Gemini 에게 맡긴다."
+      echo "  → 드라이브의 Gemini 는 통화 녹음을 전사하지 않는다(확정). 필요하면"
+      echo "    앱에서 직접 공유해 내보내고 'transcripts' 로 짝지어라."
       echo "    (음성만 올라가면 되므로 이 항목이 0건이어도 문제가 아니다)"
     fi
   fi
@@ -1892,7 +1894,8 @@ $(run_android "$pmbin" list packages 2>/dev/null | sed 's/^package://' \
   echo "  통화 종료를 감지해 그 메뉴를 대신 눌러 준다. 루팅은 권하지 않는다."
   echo
   echo "  ※ 전사가 어떻게 결론 나든 녹취(음성) 업로드는 독립적으로 동작한다."
-  echo "    그때까지는 음성만 올리고 전사는 드라이브의 Gemini 에게 맡긴다."
+  echo "    드라이브의 Gemini 는 통화 녹음을 전사하지 않는다(확정) — 전사를"
+  echo "    원하면 위에서 찾은 메뉴로 내보내고 'transcripts' 로 짝지어라."
   echo "----------------------------------------"
 }
 
@@ -2117,7 +2120,7 @@ cmd_status() {
   echo "감시 대기       : ${pending}건 (올릴 차례 ${ready} / 유예 중 ${held})"
   echo "업로드 유예     : ${HOLD_DAYS}일 (찍은 지 이만큼 지나야 올린다)"
   if [ "$CALL_ENABLED" = "1" ]; then
-    # 전사를 자동으로 못 가져오는 기기에서는 Gemini 에게 시킬 일이 밀린다.
+    # 전사를 자동으로 못 가져오는 기기에서는 사람이 손수 내보낼 일이 밀린다.
     # 알림을 놓쳐도 여기서 숫자로 걸리게 한다.
     local ca=0 notr=0
     # find_call_files 는 음성과 전사를 함께 준다. 전사가 아닌 것이 곧 녹음이다.
@@ -2126,7 +2129,7 @@ cmd_status() {
       ca=$((ca + 1))
       siblings_of_class "$f" transcript >/dev/null 2>&1 || notr=$((notr + 1))
     done < <(find_call_files 2>/dev/null)
-    echo "통화녹취        : ${ca}건 (전사 짝 없음 ${notr}건 — Gemini 전사 대기)"
+    echo "통화녹취        : ${ca}건 (전사 짝 없음 ${notr}건 — transcripts 로 손수 짝짓기)"
   fi
   echo "폰 전체 사진    : ${everything}건 (검사 범위: $MIGRATE_ROOTS)"
   echo "휴지통          : ${trashed}건 (보관 ${RETENTION_DAYS}일, $(du -sh "$TRASH_DIR" 2>/dev/null | cut -f1))"

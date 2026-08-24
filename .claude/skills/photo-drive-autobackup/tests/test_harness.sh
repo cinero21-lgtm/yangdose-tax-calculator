@@ -1163,11 +1163,11 @@ PCALL="$SHARED/Recordings/Call"
 rm -rf "$SHARED/Recordings" "$SHARED/전사보관"; mkdir -p "$PCALL"
 printf 'a' > "$PCALL/통화 01011112222_260820_101010.m4a"
 
-# (가) 폰 어디에도 전사가 없다 → 단정하고 Gemini 방침을 안내한다
+# (가) 폰 어디에도 전사가 없다 → 단정하고 손수 내보내는 절차를 안내한다
 out=$(CALL_ENABLED=1 CALL_DIRS="$PCALL" "$SKILL/scripts/photo-autobackup.sh" probe 2>&1)
 check "폰 전체를 훑었다고 말한다"   1 "$(echo "$out" | grep -c '폰 전체를 훑는다')"
 check "어디에도 없다고 단정한다"   1 "$(echo "$out" | grep -c '폰 어디에도 파일로는 없다')"
-check "Gemini 방침을 안내한다"     1 "$(echo "$out" | grep -c 'Gemini')"
+check "손수 내보내는 절차를 안내한다" 1 "$(echo "$out" | grep -c 'transcripts')"
 check "0건이 실패가 아님을 밝힌다" 1 "$(echo "$out" | grep -c '문제가 아니다')"
 
 # (나) 다른 폴더에 있으면 찾아내고 경로를 보여 준다 (녹음 폴더 밖)
@@ -1214,8 +1214,9 @@ check "--deep 없이는 안 나온다"   0 "$(echo "$out" | grep -c '깊은 조�
 check "알 수 없는 옵션은 거부한다" 1 "$("$SKILL/scripts/photo-autobackup.sh" probe --없는옵션 2>&1 | grep -c '알 수 없는 옵션')"
 
 echo "== 99. 녹취를 올리면 알리고, 올릴 게 없으면 안 알린다 =="
-# 전사를 자동으로 못 가져오는 기기에서는 사람이 Gemini 에게 시켜야 하는데 그걸
-# 잊는 것이 실제 실패 지점이다. 그렇다고 매번 띄우면 알림을 꺼 버려 대책이 죽는다.
+# 드라이브의 Gemini 는 통화 녹음을 전사하지 않는다(확정). 전사가 필요하면 사람이
+# 앱에서 직접 공유해 내보내야 하는데 그걸 잊는 것이 실제 실패 지점이다. 그렇다고
+# 매번 띄우면 알림을 꺼 버려 대책이 죽는다.
 cat > "$ROOT/bin/termux-notification" <<'TN'
 #!/usr/bin/env bash
 printf '%s
@@ -1226,7 +1227,7 @@ NL="$ROOT/notify99.log"; : > "$NL"
 rm -f "$SHARED/Android/data/com.sec.voicenote/files"/*
 NOTIFY_LOG="$NL" CALL_ENABLED=1 CALL_DIRS="$SHARED/Recordings/Call"   "$SKILL/scripts/photo-autobackup.sh" calls >/dev/null 2>&1
 check "업로드하면 알린다"          1 "$(grep -c '통화녹취 1건 업로드' "$NL")"
-check "Gemini 전사를 상기시킨다"   1 "$(grep -c 'Gemini' "$NL")"
+check "손수 전사를 상기시킨다"     1 "$(grep -c 'transcripts' "$NL")"
 
 # 두 번째 실행 — 이미 올렸으니 새로 올릴 것이 없다 → 알림이 늘면 안 된다
 before=$(wc -l < "$NL")
