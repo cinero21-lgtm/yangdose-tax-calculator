@@ -156,12 +156,20 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
         <select id="asset_type">
           <option value="주택" selected>주택 (아파트·빌라 등)</option>
           <option value="조합원입주권">조합원입주권</option>
+          <option value="분양권">분양권</option>
+          <option value="토지">토지</option>
+          <option value="건물">건물 (비주택)</option>
         </select>
+        <span class="tip" data-tip="분양권은 1년 이상 보유해도 60% 고정(기본세율 전환 없음). 토지·건물은 1년미만 50%·1~2년 40%">?</span>
+      </label>
+      <label class="chk"><input type="checkbox" id="is_nonbusiness_land"> 비사업용 토지예요 <small style="font-weight:400;color:var(--muted)">(토지·건물 선택 시)</small>
+        <span class="tip" data-tip="나대지·부재지주 농지 등. 기본세율에 10%p가 더해집니다(장기보유특별공제는 적용 가능)">?</span>
       </label>
       <label class="chk"><input type="checkbox" id="is_registered" checked> 등기된 주택이에요
         <span class="tip" data-tip="미등기로 팔면 세율 70% + 각종 공제가 사라져요">?</span>
       </label>
-      <label>판 금액 (양도가액)
+      <label>판 금액 (양도가액) <small style="font-weight:400;color:var(--muted)">— 승계 채무 포함 총액</small>
+        <span class="tip" data-tip="매수인이 인수한 전세보증금·근저당 대출도 양도가액에 포함됩니다(소득세법 §88 5호). 실제로 손에 쥔 잔금만 적으면 과소신고가 됩니다">?</span>
         <input type="text" id="transfer_price" class="money" inputmode="numeric" placeholder="예: 1,500,000,000">
         <small class="hint" id="transfer_price_h"></small>
       </label>
@@ -300,6 +308,21 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
       <label class="chk"><input type="checkbox" id="is_adjusted_area_at_acquisition"> 살 때 조정대상지역이었어요
         <span class="tip" data-tip="2017-08-03 이후 조정대상지역에서 산 집만 '2년 이상 거주'가 비과세 요건이에요. 그 전 취득분은 거주요건이 없어요">?</span>
       </label>
+      <label class="wide">팔 때(양도 당시) 조정대상지역 <small style="font-weight:400;color:var(--muted)">— 다주택 중과 판정</small>
+        <select id="adj_area_now">
+          <option value="비조정" selected>조정대상지역 아님 (중과 없음)</option>
+          <option value="강남3구용산">서울 강남·서초·송파·용산 (경과조치 4개월)</option>
+          <option value="기타조정">그 외 조정대상지역 (경과조치 6개월)</option>
+        </select>
+        <span class="tip" data-tip="2026-07-01 공고 기준 조정대상지역 = 서울 25개구 전역 + 경기 15곳(수원 장안·팔달·영통, 성남 수정·중원·분당, 안양 동안, 과천, 용인 수지·기흥, 광명, 하남, 의왕, 화성 동탄, 구리). 2026-05-10 양도분부터 다주택 중과가 부활했습니다">?</span>
+      </label>
+      <label>매매계약일 <small style="font-weight:400;color:var(--muted)">(중과 경과조치·선택)</small>
+        <input type="date" id="sales_contract_date">
+        <span class="tip" data-tip="2026-05-09까지 계약하고 계약금을 받았다면, 계약일부터 4개월(그 외 조정지역은 6개월) 이내 양도 시 중과가 배제됩니다">?</span>
+      </label>
+      <label class="chk"><input type="checkbox" id="land_permit_case"> 토지거래허가 대상이고 허가를 받았어요
+        <span class="tip" data-tip="토지거래허가 대상이면 2026-05-10 이후 계약분도 강남3구·용산은 2026-09-09까지, 그 외 조정지역은 2026-11-09까지 양도 시 중과 배제">?</span>
+      </label>
     </div>
 
     <details class="fold" open>
@@ -308,7 +331,7 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
         <div class="exp-row">
           <select id="exp_type">
             <optgroup label="취득 관련">
-              <option value="취득세·등록면허세">취득세·등록면허세</option>
+              <option value="취득세·등록면허세(실제 납부액)">취득세·등록면허세 (실제 납부액)</option>
               <option value="법무사 수수료(취득·등기)">법무사 수수료(취득·등기)</option>
               <option value="취득 시 중개수수료" data-broker="acq">취득 시 중개수수료</option>
               <option value="인지세·신고 대행료">인지세·신고 대행료</option>
@@ -375,12 +398,21 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
 
       <h2 style="font-size:16px;margin-top:18px">세액감면 <small>(조세특례제한법)</small></h2>
       <div class="grid">
+        <label class="wide">감면 종류 <small style="font-weight:400;color:var(--muted)">(한도·농어촌특별세가 달라집니다)</small>
+          <select id="reduction_type">
+            <option value="없음" selected>감면 없음</option>
+            <option value="농지">농지·자경 계열 (조특법 §66~§70 · 8년 자경농지·농지대토 등)</option>
+            <option value="공익">공익사업 계열 (조특법 §77·§77의2·§77의3 · 수용·대토보상)</option>
+            <option value="기타">기타 감면</option>
+          </select>
+          <span class="tip" data-tip="농지 계열: 한도 1과세기간 1억·5과세기간 2억 + 농어촌특별세 비과세. 공익사업 계열: 한도 1과세기간 2억·5과세기간 3억 + 농어촌특별세 20% 과세 (조특법 §133)">?</span>
+        </label>
         <label>감면율 (%)
           <input type="number" id="reduction_rate" min="0" max="100" step="1" value="0">
           <span class="tip" data-tip="8년 자경농지 100%, 공익사업용 토지 10~40% 등. 주택은 대부분 해당 없음">?</span>
         </label>
         <label>감면 종합한도 잔여액
-          <input type="text" id="reduction_cap" class="money" inputmode="numeric" placeholder="100,000,000">
+          <input type="text" id="reduction_cap" class="money" inputmode="numeric" placeholder="비우면 종류별 기본값(농지 1억·공익 2억)">
           <span class="tip" data-tip="조특법 §133: 1과세기간 1억원, 5개 과세기간 합계 2억원 한도. 비우면 1억원으로 계산합니다">?</span>
         </label>
         <label class="chk"><input type="checkbox" id="farm_nts_exempt"> 농어촌특별세 비과세 대상이에요
@@ -402,7 +434,12 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
           <span class="tip" data-tip="1일 0.022%(연 8.03%)의 납부지연가산세가 붙어요">?</span>
         </label>
       </div>
-      <p class="note">💡 예정신고는 양도일이 속한 <b>달의 말일부터 2개월 이내</b>. 납부할 세액이 <b>1천만원을 초과</b>하면 2개월 이내 분납할 수 있어요(2천만원 이하: 1천만원 초과분 / 2천만원 초과: 세액의 50% 이하).</p>
+      <p class="note">💡 <b>신고기한(2트랙)</b>: 양도소득세 예정신고 = 양도일이 속한 <b>달의 말일부터 2개월</b>(부담부증여는 3개월).
+      <b>지방소득세는 여기에 +2개월</b>(지방세법 §103의5) — 신고 상대도 세무서 ↔ 지방자치단체로 다릅니다. 확정신고는 5/31 ↔ 지방 7/31.
+      납부할 세액이 <b>1천만원 초과</b> 시 2개월 내 분납 가능(2천만원 이하: 1천만원 초과분 / 2천만원 초과: 세액의 50% 이하).<br>
+      🎖️ <b>국가유공자</b>: 양도소득세에는 국가유공자 감면 규정이 <b>없습니다</b>(소득세법·조특법 전수확인). 혜택은 <b>취득세·자동차세 등 지방세</b>(지방세특례제한법 §29)와 보훈급여금 비과세에 한정됩니다.
+      또한 <b>감면받은 취득세는 필요경비에 넣을 수 없고</b>(실제 납부액만 인정), 실제 납부한 농어촌특별세·지방교육세는 산입됩니다.<br>
+      🏦 <b>대출금·대출이자는 필요경비가 아닙니다</b> — 원금은 이미 취득가액(매매대금)에 포함되어 이중계상이 되고, 금융기관 지급이자는 국세청이 불인정합니다(예외: 매도인에 대한 할부·연불 약정이자).</p>
     </details>
 
     <button id="calcBtn" class="primary">세금 계산하기</button>
@@ -452,8 +489,18 @@ const NO_FILING_RATE = [20, 100];        // 무신고가산세 20%
 const UNDER_FILING_RATE = [10, 100];     // 과소신고가산세 10%
 const LATE_PAY_PER_DAY = [22, 100000];   // 납부지연 1일 0.022%
 const NTS_SURTAX_RATE = [20, 100];       // 농어촌특별세 = 감면세액의 20%
-const DEFAULT_REDUCTION_CAP = 100000000; // 감면 종합한도(1과세기간 1억)
+const REDUCTION_CAP_FARM = 100000000;   // 조특법 §133① 농지·자경 계열(§66~§70) 1과세기간 1억
+const REDUCTION_CAP_PUBLIC = 200000000; // 조특법 §133② 공익사업 계열(§77·§77의2·§77의3) 1과세기간 2억
 const INSTALLMENT_THRESHOLD = 10000000;  // 분납 기준 1천만원
+/* ── 다주택 중과 (2026-05-10 양도분부터 부활) ──
+   소득세법 §104⑦ / 시행령 §167의3①12의2·§167의4·§167의10·§167의11
+   유예 문언 "2026년 5월 9일까지 양도하는 주택" → 그 다음날부터 중과 적용 */
+const HEAVY_GRACE_LAST = "2026-05-09";   // 유예 마지막 양도일
+const HEAVY_SUR_2 = [20, 100];           // 조정지역 2주택 +20%p
+const HEAVY_SUR_3 = [30, 100];           // 조정지역 3주택 이상 +30%p
+const GRACE_DEADLINE_4M = "2026-09-09";  // 토지거래허가·4개월지역 최종기한
+const GRACE_DEADLINE_6M = "2026-11-09";  // 토지거래허가·6개월지역 최종기한
+const NONBIZ_SUR = [10, 100];            // 비사업용 토지 +10%p (§104①8호)
 
 const BASIC_RATE_BRACKETS = [
   [14000000,   [6, 100],  0],
@@ -589,8 +636,53 @@ function judgeExemption(inp, holdingYearsForExempt, householdResidenceYears) {
   return { status: "일부과세", warns: warns, residenceRequired: residenceRequired };
 }
 
-function ltsd(inp, holdingYears, residenceYears, taxableGain) {
+/* 개월 가산(말일 보정) */
+function addMonths(iso, m) {
+  const p = iso.split("-").map(Number);
+  let y = p[0], mo = p[1] + m, d = p[2];
+  y += Math.floor((mo - 1) / 12); mo = ((mo - 1) % 12) + 1;
+  const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  if (d > last) d = last;
+  return y + "-" + ("0" + mo).slice(-2) + "-" + ("0" + d).slice(-2);
+}
+
+/* 다주택 중과 판정. 반환 {applies, surcharge, note} */
+function heavyInfo(inp, holdingYears) {
+  const off = function (note) { return { applies: false, surcharge: [0, 100], note: note || "" }; };
+  if (inp.asset_type !== "주택") return off("");
+  if (inp.adj_area_now === "비조정") return off("");
+  const cnt = inp.household_house_count || 1;
+  if (cnt < 2) return off("");
+  if (!inp.transfer_date) return off("");
+  const six = (inp.adj_area_now === "기타조정");
+  // 가목: 2026-05-09까지 양도분은 중과 배제
+  if (toDays(inp.transfer_date) <= toDays(HEAVY_GRACE_LAST))
+    return off("2026-05-09까지 양도분은 다주택 중과가 배제(유예)되어 기본세율을 적용했습니다.");
+  // 나목·다목 경과조치 (보유 2년 이상 전제)
+  if (holdingYears >= 2 && inp.sales_contract_date) {
+    if (toDays(inp.sales_contract_date) <= toDays(HEAVY_GRACE_LAST)) {
+      const dl = addMonths(inp.sales_contract_date, six ? 6 : 4);
+      if (toDays(inp.transfer_date) <= toDays(dl))
+        return off("중과 경과조치: 2026-05-09까지 매매계약 + 계약일부터 " + (six ? 6 : 4)
+          + "개월(" + dl + ") 이내 양도 → 중과 배제, 기본세율 적용 (계약금 수령 증빙 필요)");
+    } else if (inp.land_permit_case) {
+      const dl = six ? GRACE_DEADLINE_6M : GRACE_DEADLINE_4M;
+      if (toDays(inp.transfer_date) <= toDays(dl))
+        return off("중과 경과조치(토지거래허가 대상): " + dl + "까지 양도 → 중과 배제, 기본세율 적용");
+    }
+  }
+  const sur = cnt >= 3 ? HEAVY_SUR_3 : HEAVY_SUR_2;
+  return { applies: true, surcharge: sur, count: cnt,
+    note: "⚠️ 조정대상지역 " + (cnt >= 3 ? "3주택 이상" : "2주택") + " → 기본세율 +" + sur[0]
+      + "%p 중과 + 장기보유특별공제 배제 (2026-05-10 양도분부터 부활 · 소득세법 §104⑦)" };
+}
+
+function ltsd(inp, holdingYears, residenceYears, taxableGain, heavy) {
   if (!inp.is_registered) return { table: "없음(미등기 배제)", pct: 0, amount: 0, holdPct: 0, livePct: 0, note: "" };
+  if (inp.asset_type === "분양권") return { table: "없음(분양권 배제)", pct: 0, amount: 0, holdPct: 0, livePct: 0,
+    note: "분양권은 장기보유특별공제 대상이 아닙니다 — 소득세법 §95②는 토지·건물·조합원입주권만 대상으로 합니다" };
+  if (heavy && heavy.applies) return { table: "없음(다주택 중과 배제)", pct: 0, amount: 0, holdPct: 0, livePct: 0,
+    note: "소득세법 §95② — 중과대상(§104⑦) 주택은 장기보유특별공제가 배제됩니다" };
   if (holdingYears < 3) return { table: "없음(보유3년미만)", pct: 0, amount: 0, holdPct: 0, livePct: 0, note: "" };
 
   const isOneHouse = inp.is_one_household_one_house && inp.asset_type === "주택";
@@ -612,23 +704,62 @@ function ltsd(inp, holdingYears, residenceYears, taxableGain) {
   return { table: "표1(일반)", pct: pct, amount: mul(taxableGain, [pct, 100]), holdPct: pct, livePct: 0, note: why };
 }
 
-function taxByRate(inp, taxBase, holdingYears) {
+function taxByRate(inp, taxBase, holdingYears, heavy) {
   if (taxBase <= 0) return { tax: 0, desc: "과세표준 0", progressive: false };
+  // 0) 미등기양도자산 — 최우선 (§104①10호)
   if (!inp.is_registered) {
     return { tax: roundDown(mul(taxBase, [70, 100])), desc: "미등기양도자산 70% 단일세율", progressive: false };
   }
-  if (HOUSE_TYPES.indexOf(inp.asset_type) !== -1 && holdingYears < 2) {
-    const shortFrac = holdingYears < 1 ? [70, 100] : [60, 100];
-    const shortTax = mul(taxBase, shortFrac);
-    const basic = progressiveTax(taxBase).tax;
-    if (shortTax >= basic) {
-      const band = holdingYears < 1 ? "1년 미만 70%" : "1~2년 60%";
-      return { tax: roundDown(shortTax), desc: "단기 " + band + "(비교과세 채택)", progressive: false };
-    }
-    return { tax: roundDown(basic), desc: "기본세율(비교과세: 단기보다 큼)", progressive: true };
+  const prog = progressiveTax(taxBase);
+  const progTax = prog.tax;
+
+  // 1) 분양권 — 1년미만 70%, 1년이상 60% 고정(기본세율 전환 없음) §104①1호 괄호
+  if (inp.asset_type === "분양권") {
+    const f = holdingYears < 1 ? [70, 100] : [60, 100];
+    return { tax: roundDown(mul(taxBase, f)),
+      desc: "분양권 " + f[0] + "%" + (f[0] === 60 ? " 고정(장기보유해도 기본세율 전환 없음)" : "") + " · §104①1호",
+      progressive: false };
   }
-  const p = progressiveTax(taxBase);
-  return { tax: roundDown(p.tax), desc: "기본세율 " + p.ratePct + "%(누진공제 " + comma(p.deduct) + "원)", progressive: true };
+
+  // 2) 토지·건물(비주택) — 단기 50/40%, 비사업용 기본세율+10%p (§104①8호), 경합 시 큰 세액(§104⑤)
+  if (inp.asset_type === "토지" || inp.asset_type === "건물") {
+    const sf = holdingYears < 1 ? [50, 100] : (holdingYears < 2 ? [40, 100] : null);
+    if (inp.is_nonbusiness_land) {
+      const nonBiz = progTax + mul(taxBase, NONBIZ_SUR);
+      const shortTax = sf ? mul(taxBase, sf) : 0;
+      const pick = Math.max(nonBiz, shortTax);
+      return { tax: roundDown(pick), progressive: pick === nonBiz,
+        desc: pick === nonBiz
+          ? "비사업용토지 기본세율+10%p(" + (prog.ratePct + 10) + "%) · §104①8호"
+          : "단기 " + sf[0] + "%(비사업용과 경합 · 큰 세액 채택)" };
+    }
+    if (sf) {
+      const st = mul(taxBase, sf);
+      return st >= progTax
+        ? { tax: roundDown(st), desc: "토지·건물 단기 " + sf[0] + "%(" + (holdingYears < 1 ? "1년 미만" : "1~2년") + ")", progressive: false }
+        : { tax: roundDown(progTax), desc: "기본세율(단기보다 큼)", progressive: true };
+    }
+    return { tax: roundDown(progTax), desc: "기본세율 " + prog.ratePct + "%(누진공제 " + comma(prog.deduct) + "원)", progressive: true };
+  }
+
+  // 3) 주택·조합원입주권
+  const sf = holdingYears < 1 ? [70, 100] : (holdingYears < 2 ? [60, 100] : null);
+  if (heavy && heavy.applies) {
+    const heavyTax = progTax + mul(taxBase, heavy.surcharge);   // 기본세율 +20/30%p
+    const shortTax = sf ? mul(taxBase, sf) : 0;
+    const pick = Math.max(heavyTax, shortTax);                  // §104⑦ 후단 경합
+    return { tax: roundDown(pick), progressive: pick === heavyTax,
+      desc: pick === heavyTax
+        ? "다주택 중과 기본세율+" + heavy.surcharge[0] + "%p(" + (prog.ratePct + heavy.surcharge[0]) + "%) · §104⑦"
+        : "단기 " + sf[0] + "%(중과와 경합 · 큰 세액 채택)" };
+  }
+  if (sf) {
+    const st = mul(taxBase, sf);
+    return st >= progTax
+      ? { tax: roundDown(st), desc: "단기 " + (holdingYears < 1 ? "1년 미만 70%" : "1~2년 60%") + "(비교과세 채택)", progressive: false }
+      : { tax: roundDown(progTax), desc: "기본세율(비교과세: 단기보다 큼)", progressive: true };
+  }
+  return { tax: roundDown(progTax), desc: "기본세율 " + prog.ratePct + "%(누진공제 " + comma(prog.deduct) + "원)", progressive: true };
 }
 
 function necessaryExpenses(inp) {
@@ -779,8 +910,11 @@ function calcOwner(o, inp, status) {
     taxableGain = gain; // 양도차손 (음수) — 당해연도 통산 대상
   }
 
+  // 다주택 중과 판정(2026-05-10 부활 · 경과조치 반영) — 장특공·세율에 함께 반영
+  const H = heavyInfo(inp, rateHoldingYears);
+  if (H.note) base.warns.push(o.label + ": " + H.note);
   const L = taxableGain > 0
-    ? ltsd(inp, holdingYears, residenceYears, taxableGain)
+    ? ltsd(inp, holdingYears, residenceYears, taxableGain, H)
     : { table: "없음(양도차손)", pct: 0, amount: 0, holdPct: 0, livePct: 0, note: "" };
   const taxableIncome = taxableGain - L.amount;
 
@@ -794,16 +928,25 @@ function calcOwner(o, inp, status) {
     basicDeduction = Math.min(available, Math.max(0, combinedIncome));
   }
   const taxBase = Math.max(0, combinedIncome - basicDeduction);
-  const T = taxByRate(inp, taxBase, rateHoldingYears);
+  const T = taxByRate(inp, taxBase, rateHoldingYears, H);
 
-  // 이미 신고·납부한 산출세액 차감 (누진세율 합산과세의 정산)
+  // ── 당해연도 합산정산: 비교과세(소득세법 §104⑤) + 기납부세액 공제 ──
+  //  세율이 다른 자산을 같은 해에 양도한 경우 산출세액은 다음 중 큰 금액으로 한다.
+  //   방법A = 현재 자산 귀속 과세표준 × 현재 세율 + 기신고분 산출세액
+  //   방법B = 합산 과세표준 × 기본세율
+  //  그 산출세액에서 기납부(예정신고) 산출세액을 공제해 납부할 세액을 정한다.
+  const priorTax = o.priorTax || 0;
   let calculatedTax = T.tax;
-  if ((o.priorTax || 0) > 0) {
-    if (T.progressive) {
-      calculatedTax = Math.max(0, T.tax - o.priorTax);
-    } else {
-      base.warns.push(o.label + ": 단기세율·미등기 등 비교과세가 적용되어 당해연도 합산정산을 적용하지 않았습니다(기신고 산출세액 미차감).");
-    }
+  if (priorTax > 0 || (priorIncome > 0 && !T.progressive)) {
+    const priorBase = Math.max(0, priorIncome);
+    const currentShare = Math.max(0, taxBase - priorBase);
+    const curOnly = taxByRate(inp, currentShare, rateHoldingYears, H).tax;
+    const taxA = curOnly + priorTax;
+    const taxB = roundDown(progressiveTax(taxBase).tax);
+    const gross = Math.max(taxA, taxB);
+    calculatedTax = Math.max(0, gross - priorTax);
+    base.warns.push(o.label + ": 당해연도 합산 비교과세(소득세법 §104⑤) 적용 — MAX(자산별 "
+      + comma(taxA) + "원, 합산 기본세율 " + comma(taxB) + "원) − 기납부 " + comma(priorTax) + "원");
   }
   if (priorIncome !== 0) {
     base.warns.push(o.label + ": 올해 다른 자산 양도소득금액 " + comma(priorIncome)
@@ -827,6 +970,10 @@ function calculate(raw) {
   const inp = {
     asset_type: raw.asset_type != null ? raw.asset_type : "주택",
     is_registered: raw.is_registered != null ? raw.is_registered : true,
+    is_nonbusiness_land: !!raw.is_nonbusiness_land,
+    adj_area_now: raw.adj_area_now || "비조정",
+    sales_contract_date: raw.sales_contract_date || "",
+    land_permit_case: !!raw.land_permit_case,
     transfer_price: raw.transfer_price || 0,
     acquisition_price: raw.acquisition_price || 0,
     acq_method: raw.acq_method || "실지",
@@ -864,7 +1011,8 @@ function calculate(raw) {
     prior_tax_spouse: raw.prior_tax_spouse || 0,
     prior_basic_used_spouse: !!raw.prior_basic_used_spouse,
     reduction_rate: raw.reduction_rate || 0,
-    reduction_cap: raw.reduction_cap || DEFAULT_REDUCTION_CAP,
+    reduction_type: raw.reduction_type || "없음",
+    reduction_cap: raw.reduction_cap || (raw.reduction_type === "공익" ? REDUCTION_CAP_PUBLIC : REDUCTION_CAP_FARM),
     farm_nts_exempt: !!raw.farm_nts_exempt,
     filing_status: raw.filing_status || "정상",
     late_days: raw.late_days || 0,
@@ -911,10 +1059,6 @@ function calculate(raw) {
   const j = judgeExemption(inp, holdingYearsForExempt, householdResidenceYears);
   const status = j.status;
   warns.push.apply(warns, j.warns);
-
-  if (inp.household_house_count > 1) {
-    warns.push("다주택: 조정지역 중과(2026-05-10 부활)는 Phase 2 미반영 — 현 결과는 1주택 기준");
-  }
   if (!inp.is_registered) warns.push("미등기양도자산: 장특공·기본공제 배제 + 70% 중과");
   if (inp.sangsaeng) {
     warns.push("상생임대주택 특례: 비과세·장특공 표2의 '2년 거주요건'은 충족한 것으로 보되, 표2 거주기간별 공제율은 실제 거주한 기간만큼만 적용됩니다(적용기한 2026-12-31).");
@@ -944,13 +1088,24 @@ function calculate(raw) {
     if (mul(calculatedTax, [inp.reduction_rate, 100]) > inp.reduction_cap) {
       warns.push("감면 종합한도(" + comma(inp.reduction_cap) + "원)를 초과해 한도까지만 감면했습니다(조특법 §133: 1과세기간 1억원, 5개 과세기간 2억원).");
     }
-    ntsSurtax = inp.farm_nts_exempt ? 0 : roundDown(mul(reduction, NTS_SURTAX_RATE));
+    // 농어촌특별세: 조특법 §66~§70(자경농지·농지대토 등) 감면은 농특세법 §4로 비과세
+    const ntsExempt = inp.farm_nts_exempt || inp.reduction_type === "농지";
+    ntsSurtax = ntsExempt ? 0 : roundDown(mul(reduction, NTS_SURTAX_RATE));
+    if (ntsExempt && inp.reduction_type === "농지")
+      warns.push("농지·자경 계열 감면(조특법 §66~§70)은 농어촌특별세가 비과세되어 부과하지 않았습니다.");
     if (ntsSurtax) warns.push("감면세액의 20%(" + comma(ntsSurtax) + "원)가 농어촌특별세로 부과됩니다.");
   }
   const determinedTax = Math.max(0, calculatedTax - reduction);
 
-  // 지방소득세는 감면 후 결정세액 기준 10%
-  const localTax = roundDown(mul(determinedTax, [10, 100]));
+  /* 개인지방소득세(양도소득분) — 지방세법 §103의3·§103의4
+     과세표준에 소득세율의 1/10을 직접 적용하는 별개 세목(결과적으로 감면 전 산출세액의 10%).
+     §103의4: 지방소득세의 세액공제·감면은 지방세특례제한법이 정하므로
+     조특법(국세) 감면은 지방소득세에 자동 적용되지 않는다. */
+  const localTax = roundDown(mul(calculatedTax, [10, 100]));
+  if (reduction > 0) {
+    warns.push("지방소득세는 국세(조특법) 감면과 별개입니다 — 지방세법 §103의4에 따라 감면 전 산출세액 기준 "
+      + comma(localTax) + "원으로 계산했습니다. 지방세특례제한법에 대응 감면이 있으면 그만큼 더 줄어듭니다.");
+  }
 
   // 가산세
   let filingPenalty = 0;
@@ -969,6 +1124,23 @@ function calculate(raw) {
   }
 
   const totalTax = determinedTax + localTax + ntsSurtax + penaltyTotal;
+
+  // ── 절세 조언 (효과 최대: 장기보유특별공제 표1→표2 전환) ──
+  const advice = [];
+  if (!raw._noAdvice && inp.asset_type === "주택" && inp.is_one_household_one_house
+      && totalTax > 0 && details[0] && details[0].residence_years < 2 && details[0].holding_years >= 3) {
+    try {
+      const shadow = calculate(Object.assign({}, raw,
+        { residence_mode: "간단", residence_months: 24, _noAdvice: true }));
+      const save = totalTax - shadow.total_tax;
+      if (save > 0) advice.push("거주기간 2년을 채우면 장기보유특별공제가 표1(연 2%·최대 30%) → 표2(보유4%+거주4%·최대 80%)로 바뀌어 약 "
+        + comma(save) + "원 절세됩니다. 현재 통산 거주 " + details[0].residence_years + "년입니다.");
+    } catch (e) { /* 조언 계산 실패는 무시 */ }
+  }
+  if (inp.reduction_rate > 0 && inp.reduction_type === "없음")
+    advice.push("감면율을 넣었지만 감면 종류를 고르지 않았습니다 — 종류에 따라 한도(1억/2억)와 농어촌특별세(비과세/20%)가 달라집니다.");
+  if (inp.household_house_count > 1 && inp.adj_area_now !== "비조정")
+    advice.push("조정대상지역 다주택 중과는 2026-05-09까지 계약(계약금 수령)하고 계약일부터 4개월(그 외 조정지역 6개월) 이내 양도하면 배제됩니다 — '매매계약일'을 입력해 확인해 보세요.");
 
   // 분납
   let installment = null;
@@ -1034,7 +1206,7 @@ function calculate(raw) {
     taxable_income: sum("taxable_income"), basic_deduction: sum("basic_deduction"),
     tax_base: sum("tax_base"),
     calculated_tax: calculatedTax, reduction: reduction, determined_tax: determinedTax,
-    local_income_tax: localTax, nts_surtax: ntsSurtax,
+    local_income_tax: localTax, nts_surtax: ntsSurtax, advice: advice,
     filing_penalty: filingPenalty, late_penalty: latePenalty, conv_penalty: convPenalty,
     penalty_total: penaltyTotal, total_tax: totalTax,
     after_tax_gain: capitalGain - totalTax,
@@ -1215,6 +1387,10 @@ function collect() {
   return {
     asset_type: $("asset_type").value,
     is_registered: $("is_registered").checked,
+    is_nonbusiness_land: $("is_nonbusiness_land").checked,
+    adj_area_now: $("adj_area_now").value,
+    sales_contract_date: $("sales_contract_date").value,
+    land_permit_case: $("land_permit_case").checked,
     transfer_price: val("transfer_price"),
     acquisition_price: val("acquisition_price"),
     acq_method: $("acq_method").value,
@@ -1248,6 +1424,7 @@ function collect() {
     prior_basic_used_spouse: joint ? $("prior_basic_used_spouse").checked : false,
     reduction_rate: parseInt($("reduction_rate").value || "0", 10),
     reduction_cap: val("reduction_cap") || DEFAULT_REDUCTION_CAP,
+    reduction_type: $("reduction_type").value,
     farm_nts_exempt: $("farm_nts_exempt").checked,
     filing_status: $("filing_status").value,
     late_days: parseInt($("late_days").value || "0", 10),
@@ -1365,7 +1542,9 @@ function render(r) {
     $("installBox").innerHTML = "";
   }
 
-  $("warns").innerHTML = (r.warnings || []).map(function (w) {
+  $("warns").innerHTML = (r.advice || []).map(function (a) {
+    return '<div class="w" style="background:#dcfce7;border-left-color:#059669;color:#064e3b">💡 ' + esc(a) + "</div>";
+  }).join("") + (r.warnings || []).map(function (w) {
     return '<div class="w">⚠️ ' + esc(w) + "</div>";
   }).join("");
   $("resultCard").classList.remove("hidden");
