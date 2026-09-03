@@ -129,6 +129,35 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
 .ai h3{margin:0 0 10px;font-size:17px}
 .ai .aiinfo{font-size:14px;color:var(--muted);background:var(--note-bg);border-radius:10px;padding:12px 14px}
 .disclaimer{color:var(--muted);font-size:12.5px;margin:14px 0 0;text-align:center}
+.print-only{display:none}
+.print-head h1{margin:0 0 2px;font-size:20px}
+.print-head .meta{font-size:12px;color:#555;margin:0 0 10px}
+.print-sum{font-size:12.5px;line-height:1.7;border:1px solid #999;border-radius:6px;padding:10px 12px;margin:0 0 12px}
+.print-sum b{display:inline-block;min-width:78px}
+#printBtn{margin-top:14px}
+/* ══ 인쇄 / PDF 저장 ══ */
+@media print{
+  @page{size:A4;margin:14mm 12mm}
+  :root{--ink:#000;--muted:#444;--line:#999;--card:#fff;--bg:#fff;--blue-d:#000;--shadow:none;
+        --step-line:#ccc;--warn-bg:#fff;--note-bg:#fff;--badge-exempt-bg:#fff;--badge-partial-bg:#fff;--badge-tax-bg:#fff}
+  body{background:#fff!important;color:#000!important;font-size:11.5pt}
+  .topbar,#formCard,.tablet-notice,.ai,#printBtn,.tip,button{display:none!important}
+  .wrap{max-width:none;margin:0;padding:0}
+  .card{box-shadow:none!important;border:none;padding:0;margin:0}
+  .print-only{display:block!important}
+  .badge{border:1.2px solid #000;color:#000!important;background:#fff!important}
+  .bigtax{border-bottom:1.5px solid #000;padding:6px 0 12px}
+  .bigtax strong{font-size:26pt;color:#000!important}
+  .steps td{border-bottom:1px solid #ccc;padding:6px 3px}
+  .steps .total td{border-top:1.5px solid #000}
+  .steps .minus td:last-child{color:#000!important}
+  .warns .w{background:#fff!important;border:1px solid #999;border-left:3px solid #000;
+    page-break-inside:avoid;color:#000!important}
+  .period,.compare,.owner-block{background:#fff!important;border:1px solid #999;page-break-inside:avoid}
+  #resultCard{page-break-before:avoid}
+  a{text-decoration:none;color:#000}
+  a[href^="http"]::after{content:""}
+}
 .exp-row{display:flex;gap:6px;flex-wrap:wrap}
 .exp-row select{flex:1 1 46%;min-width:150px}
 .exp-row #exp_amount{flex:1 1 30%;min-width:120px}
@@ -540,6 +569,11 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
   </section>
 
   <section class="card result hidden" id="resultCard">
+    <div class="print-head print-only">
+      <h1>양도소득세 계산 결과</h1>
+      <p class="meta" id="printMeta"></p>
+    </div>
+    <div class="print-sum print-only" id="printSum"></div>
     <div class="badge" id="statusBadge"></div>
     <div class="bigtax">
       <span>예상 총 납부세액</span>
@@ -552,6 +586,8 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
     <div id="compareBox"></div>
     <div id="installBox"></div>
     <div class="warns" id="warns"></div>
+
+    <button type="button" class="mini" id="printBtn">🖨 인쇄 / PDF로 저장</button>
 
     <div class="ai">
       <h3>🤖 AI 도우미</h3>
@@ -1696,7 +1732,7 @@ function collect() {
     prior_tax_spouse: joint ? val("prior_tax_spouse") : 0,
     prior_basic_used_spouse: joint ? $("prior_basic_used_spouse").checked : false,
     reduction_rate: parseInt($("reduction_rate").value || "0", 10),
-    reduction_cap: val("reduction_cap") || DEFAULT_REDUCTION_CAP,
+    reduction_cap: val("reduction_cap") || 0,   // 0이면 calculate()가 감면 종류별 기본값(농지 1억·공익 2억) 적용
     reduction_type: $("reduction_type").value,
     prior_reduction_4y: val("prior_reduction_4y"),
     split_land_133_3: $("split_land_133_3").checked,
@@ -1717,8 +1753,10 @@ function collect() {
   };
 }
 
+$("printBtn").addEventListener("click", function () { window.print(); });
 $("calcBtn").addEventListener("click", function () {
   const p = collect();
+  lastInput = p;
   if (!p.transfer_price) { alert("판 금액(양도가액)을 입력하세요."); return; }
   if (p.acq_method === "환산") {
     if (!p.std_acq || !p.std_transfer) { alert("환산취득가액을 쓰려면 취득·양도 당시 기준시가를 입력하세요."); return; }
@@ -1771,6 +1809,33 @@ function ownerSteps(d) {
   return rows;
 }
 
+var lastInput = null;
+function pad2(x){ return ("0"+x).slice(-2); }
+function nowStamp(){
+  const d=new Date();
+  return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate())+" "+pad2(d.getHours())+":"+pad2(d.getMinutes());
+}
+/* 인쇄용 입력 요약 — 무엇을 계산한 기록인지 남긴다 */
+function renderPrintSummary(p, r){
+  if(!p){ $("printSum").innerHTML=""; return; }
+  const won=function(v){ return comma(v||0)+"원"; };
+  const rows=[];
+  rows.push("<b>자산</b> "+esc(p.asset_type)+(p.is_nonbusiness_land?" (비사업용 토지)":"")+(p.is_registered?"":" · 미등기"));
+  if(p.transaction_type==="부담부증여") rows.push("<b>거래유형</b> 부담부증여 (인수채무 "+won((p.assumed_loan||0)+(p.assumed_deposit||0))+")");
+  rows.push("<b>양도가액</b> "+won(p.transfer_price)+" &nbsp; <b>취득가액</b> "+won(p.acquisition_price)+" ("+esc(p.acq_method)+")");
+  rows.push("<b>취득일</b> "+esc(p.acquisition_date)+" &nbsp; <b>양도일</b> "+esc(p.transfer_date)
+    +" &nbsp; <b>보유</b> "+(r.holding_years!=null?r.holding_years+"년":"-")
+    +" &nbsp; <b>거주</b> "+(r.residence_years!=null?r.residence_years+"년":"-"));
+  rows.push("<b>명의</b> "+esc(p.ownership)+(p.ownership==="부부공동"?" (본인 "+p.share_self_pct+"%)":"")
+    +" &nbsp; <b>주택수</b> "+p.household_house_count+"주택"
+    +(p.is_one_household_one_house?" · 1세대1주택":"")
+    +(p.adj_area_now&&p.adj_area_now!=="비조정"?" · 양도시 조정대상지역":""));
+  if(p.special_case&&p.special_case!=="없음") rows.push("<b>비과세특례</b> "+esc(p.special_case));
+  if(p.reduction_rate>0) rows.push("<b>감면</b> "+esc(p.reduction_type)+" "+p.reduction_rate+"%");
+  if(p.defer_mode&&p.defer_mode!=="없음") rows.push("<b>대토보상</b> "+esc(p.defer_mode));
+  $("printSum").innerHTML=rows.join("<br>");
+  $("printMeta").textContent="계산 일시 "+nowStamp()+" · 2026년 세법 기준 · 참고용(신고 전 세무사·국세청 126 확인 권장)";
+}
 function render(r) {
   const badge = $("statusBadge");
   badge.textContent = r.exemption_status + (r.ownership === "부부공동" ? " · 부부공동명의" : "");
@@ -1828,6 +1893,7 @@ function render(r) {
     $("installBox").innerHTML = "";
   }
 
+  renderPrintSummary(lastInput, r);
   $("warns").innerHTML = (r.advice || []).map(function (a) {
     return '<div class="w" style="background:#dcfce7;border-left-color:#059669;color:#064e3b">💡 ' + esc(a) + "</div>";
   }).join("") + (r.warnings || []).map(function (w) {
