@@ -165,6 +165,9 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
       <label class="chk"><input type="checkbox" id="is_nonbusiness_land"> 비사업용 토지예요 <small style="font-weight:400;color:var(--muted)">(토지·건물 선택 시)</small>
         <span class="tip" data-tip="나대지·부재지주 농지 등. 기본세율에 10%p가 더해집니다(장기보유특별공제는 적용 가능)">?</span>
       </label>
+      <label class="chk"><input type="checkbox" id="is_designated_area"> 지정지역(투기지역) 소재 <small style="font-weight:400;color:var(--muted)">(비사업용 토지 추가 +10%p)</small>
+        <span class="tip" data-tip="소득세법 §104④3호 — 지정지역 소재 비사업용 토지는 기본세율+20%p. 2026-09 현재 지정 공고를 확인하지 못해 기본값은 미적용입니다. 재정경제부 공고를 확인한 경우에만 체크하세요">?</span>
+      </label>
       <label class="chk"><input type="checkbox" id="is_registered" checked> 등기된 주택이에요
         <span class="tip" data-tip="미등기로 팔면 세율 70% + 각종 공제가 사라져요">?</span>
       </label>
@@ -204,6 +207,43 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
         <input type="date" id="transfer_date" value="2026-07-29">
       </label>
     </div>
+
+    <details class="fold">
+      <summary>1-1. 부담부증여 <small>(채무·전세보증금을 끼워 증여한 경우 — 해당되면 펼치세요)</small></summary>
+      <div class="grid">
+        <label class="wide">거래 유형
+          <select id="transaction_type">
+            <option value="일반양도" selected>일반 양도(매매)</option>
+            <option value="부담부증여">부담부증여 (수증자가 채무 인수)</option>
+          </select>
+          <span class="tip" data-tip="수증자가 인수한 채무액(대출+전세보증금)에 해당하는 부분은 '양도'로 보아 증여자에게 양도소득세가 과세됩니다(소득세법 §88 1호)">?</span>
+        </label>
+        <label>증여재산 평가액 <small style="font-weight:400;color:var(--muted)">(상증법 §60~66)</small>
+          <input type="text" id="gift_appraised_value" class="money" inputmode="numeric" placeholder="예: 900,000,000">
+        </label>
+        <label>증여가액 <small style="font-weight:400;color:var(--muted)">(안분 분모)</small>
+          <input type="text" id="gift_total_value" class="money" inputmode="numeric" placeholder="예: 900,000,000">
+        </label>
+        <label>인수한 대출 채무
+          <input type="text" id="assumed_loan" class="money" inputmode="numeric" placeholder="0">
+        </label>
+        <label>인수한 전세·임대보증금
+          <input type="text" id="assumed_deposit" class="money" inputmode="numeric" placeholder="0">
+          <span class="tip" data-tip="상증법 시행령 §36① — 임대보증금도 채무액에 포함됩니다. 대출이 전혀 없어도 전세 놓인 집을 부담부증여하면 양도소득세가 나옵니다">?</span>
+        </label>
+        <label>과세대상 자산가액 <small style="font-weight:400;color:var(--muted)">(비과세 자산 혼재 시)</small>
+          <input type="text" id="taxable_asset_value" class="money" inputmode="numeric" placeholder="비우면 안분 안 함">
+        </label>
+        <label>증여자–수증자 관계
+          <select id="gift_relation">
+            <option value="기타" selected>그 외</option>
+            <option value="배우자직계">배우자 · 직계존비속</option>
+          </select>
+          <span class="tip" data-tip="배우자·직계존비속 간에는 채무 인수가 '인수되지 않은 것으로 추정'되어(상증법 §47③) 객관적 입증서류가 필요합니다">?</span>
+        </label>
+      </div>
+      <p class="note">💡 <b>취득가액</b>란에는 <b>증여자의 당초 취득가액(전체)</b>을 넣으세요 — 채무비율로 자동 안분합니다. 예정신고기한은 <b>3개월</b>(지방소득세 +2개월)입니다.</p>
+    </details>
 
     <h2>2. 거주 이력 <small>(보유만 / 일부만 거주 / 이사·임차로 나뉜 거주를 통산)</small></h2>
     <div class="grid">
@@ -325,6 +365,40 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
       </label>
     </div>
 
+    <details class="fold">
+      <summary>4-1. 1세대1주택 비과세 특례 <small>(2주택 이상이어도 비과세 가능 — 해당되면 펼치세요)</small></summary>
+      <div class="grid">
+        <label class="wide">특례 유형
+          <select id="special_case">
+            <option value="없음" selected>해당 없음</option>
+            <option value="일시적2주택">일시적 2주택 (이사·대체취득) — 신규 취득 후 3년 내</option>
+            <option value="상속주택">상속주택 + 일반주택 — 기한 없음</option>
+            <option value="동거봉양">동거봉양 합가 (60세 이상 직계존속) — 10년 내</option>
+            <option value="혼인">혼인 합가 — 10년 내</option>
+            <option value="농어촌주택">농어촌주택 (상속·이농) — 기한 없음</option>
+            <option value="귀농주택">귀농주택 — 취득 후 5년 내</option>
+            <option value="인구감소지역">인구감소지역주택 (2024.1.4~2026.12.31 취득)</option>
+            <option value="부득이한사유">부득이한 사유 수도권 밖 주택 — 사유해소 후 3년 내</option>
+          </select>
+          <span class="tip" data-tip="특례가 인정되면 2주택 이상이어도 1세대1주택 비과세(12억 이하 전액)를 받고, 다주택 중과도 배제됩니다. 유형별 기한·요건을 아래 날짜로 판정합니다">?</span>
+        </label>
+        <label>신규주택 취득일 <small style="font-weight:400;color:var(--muted)">(일시적 2주택)</small>
+          <input type="date" id="new_house_acq_date">
+        </label>
+        <label class="chk"><input type="checkbox" id="relocation_5y"> 수도권 법인·공공기관 지방이전 종사자 <small style="font-weight:400;color:var(--muted)">(기한 5년·1년 경과요건 면제)</small></label>
+        <label>합가일 / 혼인일 <small style="font-weight:400;color:var(--muted)">(동거봉양·혼인)</small>
+          <input type="date" id="merge_date">
+        </label>
+        <label>농어촌·귀농·인구감소지역 주택 취득일
+          <input type="date" id="rural_acq_date">
+        </label>
+        <label>부득이한 사유 해소일 <small style="font-weight:400;color:var(--muted)">(취학·근무·질병)</small>
+          <input type="date" id="reason_resolved_date">
+        </label>
+      </div>
+      <p class="note">💡 특례를 적용해도 <b>보유 2년</b>(취득 당시 조정대상지역이면 <b>거주 2년</b>) 요건은 별도로 충족해야 합니다. 위 판정은 <b>기한 계산</b>만 자동화한 것이며, 세부 요건(주택 수·소재지·기준시가·동일세대 여부)은 반드시 확인하세요.</p>
+    </details>
+
     <details class="fold" open>
       <summary>5. 필요경비 입력 <small>(공제 항목을 골라 추가 — 세금이 줄어요)</small></summary>
       <div>
@@ -415,6 +489,26 @@ input[type=checkbox]{width:20px;height:20px;flex:none}
           <input type="text" id="reduction_cap" class="money" inputmode="numeric" placeholder="비우면 종류별 기본값(농지 1억·공익 2억)">
           <span class="tip" data-tip="조특법 §133: 1과세기간 1억원, 5개 과세기간 합계 2억원 한도. 비우면 1억원으로 계산합니다">?</span>
         </label>
+        <label>직전 4개 과세기간 감면액 <small style="font-weight:400;color:var(--muted)">(5개 과세기간 한도용)</small>
+          <input type="text" id="prior_reduction_4y" class="money" inputmode="numeric" placeholder="0">
+          <span class="tip" data-tip="조특법 §133 — 당해 + 직전 4개 과세기간 합계 한도(농지 2억·공익 3억)와 과세기간별 한도(1억·2억) 중 초과액이 큰 쪽을 감면 배제합니다">?</span>
+        </label>
+        <label class="chk"><input type="checkbox" id="split_land_133_3"> 소급 1년 내 토지 분할·2년 내 배우자에게 잔여 양도 <small style="font-weight:400;color:var(--muted)">(§133③)</small>
+          <span class="tip" data-tip="이 경우 1개 과세기간에 모두 양도한 것으로 간주되어 과세기간을 나눠 한도를 늘리는 절세가 무력화됩니다">?</span>
+        </label>
+        <label class="wide">대토보상 처리 <small style="font-weight:400;color:var(--muted)">(공익수용 — 조특법 §77의2)</small>
+          <select id="defer_mode">
+            <option value="없음" selected>해당 없음</option>
+            <option value="감면">40% 감면 선택 (위 감면율에 40 입력)</option>
+            <option value="과세이연">과세이연 선택</option>
+          </select>
+          <span class="tip" data-tip="공익사업 시행자에게 양도하고 대토(조성토지)로 보상받는 부분은 40% 감면 또는 과세이연 중 선택할 수 있습니다. 적용기한 2026-12-31">?</span>
+        </label>
+        <label>사업인정고시일<input type="date" id="project_notice_date">
+          <span class="tip" data-tip="이 날부터 소급 2년 이전에 취득한 토지여야 적용됩니다">?</span>
+        </label>
+        <label>총보상액<input type="text" id="total_compensation" class="money" inputmode="numeric" placeholder="0"></label>
+        <label>대토보상 상당액<input type="text" id="land_compensation" class="money" inputmode="numeric" placeholder="0"></label>
         <label class="chk"><input type="checkbox" id="farm_nts_exempt"> 농어촌특별세 비과세 대상이에요
           <span class="tip" data-tip="감면세액의 20%가 농어촌특별세로 붙어요. 재촌·자경농지 감면 등은 농특세가 비과세됩니다">?</span>
         </label>
@@ -491,6 +585,9 @@ const LATE_PAY_PER_DAY = [22, 100000];   // 납부지연 1일 0.022%
 const NTS_SURTAX_RATE = [20, 100];       // 농어촌특별세 = 감면세액의 20%
 const REDUCTION_CAP_FARM = 100000000;   // 조특법 §133① 농지·자경 계열(§66~§70) 1과세기간 1억
 const REDUCTION_CAP_PUBLIC = 200000000; // 조특법 §133② 공익사업 계열(§77·§77의2·§77의3) 1과세기간 2억
+const REDUCTION_CAP5_FARM = 200000000;   // §133① 5개 과세기간(당해+직전4) 합계 2억
+const REDUCTION_CAP5_PUBLIC = 300000000; // §133② 5개 과세기간 합계 3억
+const DEFER_DEADLINE = "2026-12-31";     // 조특법 §77의2 대토보상 과세이연 적용기한
 const INSTALLMENT_THRESHOLD = 10000000;  // 분납 기준 1천만원
 /* ── 다주택 중과 (2026-05-10 양도분부터 부활) ──
    소득세법 §104⑦ / 시행령 §167의3①12의2·§167의4·§167의10·§167의11
@@ -594,9 +691,76 @@ function ltsdTable1Pct(h) { return h < 3 ? 0 : Math.min(Math.min(h, 15) * 2, 30)
 function ltsdHoldPct(h) { return h < 3 ? 0 : Math.min(Math.min(h, 10) * 4, 40); }
 function ltsdLivePct(r, h) { return (h < 3 || r < 2) ? 0 : Math.min(Math.min(r, 10) * 4, 40); }
 
+/* 1세대1주택 비과세 특례(주택 수 예외) 판정 — 시행령 §155 계열 + 조특법 §71의2 */
+function specialOneHouse(inp, holdingYears) {
+  const t = inp.special_case || "없음";
+  const NO = { ok: false, tried: false, note: "" };
+  if (t === "없음") return NO;
+  const T = inp.transfer_date;
+  if (!T) return NO;
+  switch (t) {
+    case "일시적2주택": {
+      if (!inp.new_house_acq_date) return { ok: false, tried: true, note: "일시적 2주택: 신규주택 취득일을 입력하세요" };
+      const gapY = fullYears(inp.acquisition_date, inp.new_house_acq_date);
+      const limit = inp.relocation_5y ? 5 : 3;
+      const dl = addMonths(inp.new_house_acq_date, limit * 12);
+      const okGap = inp.relocation_5y || gapY >= 1;
+      const okDl = toDays(T) <= toDays(dl);
+      if (okGap && okDl) return { ok: true, tried: true,
+        note: "일시적 2주택(대체취득) — 종전주택 취득 후 " + gapY + "년 경과 뒤 신규 취득, 기한 " + dl + " 이내 양도 (시행령 §155①)" };
+      return { ok: false, tried: true, note: "일시적 2주택 미충족"
+        + (okGap ? "" : " · 종전주택 취득 1년 경과 후 신규 취득 필요")
+        + (okDl ? "" : " · 신규 취득일부터 " + limit + "년(" + dl + ") 이내 양도 필요") };
+    }
+    case "상속주택":
+      return { ok: true, tried: true, note: "상속주택 특례 — 상속주택은 주택 수에서 제외되고 일반주택 양도에 기한 제한이 없습니다(시행령 §155②). 단 ①상속개시 당시 동일세대였다면 원칙 배제 ②상속개시 소급 2년 내 피상속인에게 증여받은 주택은 일반주택에서 제외됩니다" };
+    case "동거봉양":
+    case "혼인": {
+      const isDong = (t === "동거봉양");
+      if (!inp.merge_date) return { ok: false, tried: true, note: (isDong ? "동거봉양 합가일" : "혼인일") + "을 입력하세요" };
+      const dl = addMonths(inp.merge_date, 120);
+      if (toDays(T) <= toDays(dl)) return { ok: true, tried: true,
+        note: (isDong ? "동거봉양 합가" : "혼인 합가") + " 특례 — " + (isDong ? "합가" : "혼인") + "일부터 10년(" + dl + ") 이내 먼저 양도하는 주택 (시행령 §155" + (isDong ? "④" : "⑤") + ")"
+          + (isDong ? ". 직계존속 60세 이상(중증질환 시 미만 가능) 1주택 요건 필요" : "") };
+      return { ok: false, tried: true, note: (isDong ? "동거봉양" : "혼인") + " 합가 10년 기한(" + dl + ") 경과 → 특례 불가" };
+    }
+    case "농어촌주택":
+      return { ok: true, tried: true, note: "농어촌주택(상속·이농) 특례 — 수도권 밖 읍(도시지역 제외)·면 소재 주택은 주택 수에서 제외, 기한 없음 (시행령 §155⑦). 피상속인/본인이 5년 이상 거주한 주택이어야 합니다" };
+    case "귀농주택": {
+      if (!inp.rural_acq_date) return { ok: false, tried: true, note: "귀농주택 취득일을 입력하세요" };
+      const dl = addMonths(inp.rural_acq_date, 60);
+      if (toDays(T) <= toDays(dl)) return { ok: true, tried: true,
+        note: "귀농주택 특례 — 취득일부터 5년(" + dl + ") 이내 일반주택 양도 (시행령 §155⑩~⑫). 대지 660㎡ 이내·농지 1,000㎡ 이상 소유·귀농일부터 3년 이상 계속 영농·거주 요건(미충족 시 2개월 내 추징)" };
+      return { ok: false, tried: true, note: "귀농주택 5년 기한(" + dl + ") 경과 → 특례 불가" };
+    }
+    case "인구감소지역": {
+      if (!inp.rural_acq_date) return { ok: false, tried: true, note: "인구감소지역주택 취득일을 입력하세요" };
+      const a = toDays(inp.rural_acq_date);
+      if (a >= toDays("2024-01-04") && a <= toDays("2026-12-31")) return { ok: true, tried: true,
+        note: "인구감소지역주택 특례 — 2024-01-04~2026-12-31 취득분은 주택 수에서 제외(그 취득 전 보유한 주택을 양도할 때). 기준시가 수도권 밖 인구감소지역 9억·수도권 내/관심지역 4억 이하, 기존 보유주택과 다른 시·군·구여야 함 (조특법 §71의2) ★취득기한 2026-12-31 임박" };
+      return { ok: false, tried: true, note: "인구감소지역주택 취득기간(2024-01-04~2026-12-31)을 벗어남" };
+    }
+    case "부득이한사유": {
+      if (!inp.reason_resolved_date) return { ok: false, tried: true, note: "부득이한 사유 해소일을 입력하세요" };
+      const dl = addMonths(inp.reason_resolved_date, 36);
+      if (toDays(T) <= toDays(dl)) return { ok: true, tried: true,
+        note: "부득이한 사유(취학·근무·질병 요양) 수도권 밖 주택 특례 — 사유 해소일부터 3년(" + dl + ") 이내 일반주택 양도 (시행령 §155⑧)" };
+      return { ok: false, tried: true, note: "부득이한 사유 3년 기한(" + dl + ") 경과 → 특례 불가" };
+    }
+  }
+  return NO;
+}
+
 function judgeExemption(inp, holdingYearsForExempt, householdResidenceYears) {
   const warns = [];
-  if (!inp.is_one_household_one_house) return { status: "과세", warns: warns, residenceRequired: false };
+  let oneHouse = inp.is_one_household_one_house;
+  const sp = specialOneHouse(inp, holdingYearsForExempt);
+  if (sp.tried) {
+    if (sp.ok && !oneHouse) { oneHouse = true; warns.push("✅ 비과세 특례 적용 — " + sp.note); }
+    else if (sp.ok) warns.push("비과세 특례 확인 — " + sp.note);
+    else warns.push("⚠️ 비과세 특례 미충족 — " + sp.note);
+  }
+  if (!oneHouse) return { status: "과세", warns: warns, residenceRequired: false };
 
   const hardshipOK = inp.hardship && householdResidenceYears >= 1;
 
@@ -654,6 +818,8 @@ function heavyInfo(inp, holdingYears) {
   const cnt = inp.household_house_count || 1;
   if (cnt < 2) return off("");
   if (!inp.transfer_date) return off("");
+  const sp = specialOneHouse(inp, holdingYears);
+  if (sp.ok) return off("비과세 특례(" + inp.special_case + ") 대상이어서 다주택 중과를 적용하지 않았습니다 — 중과 제외 목록(시행령 §167의3① 각 호)과는 별개 규정이므로 실제 해당 여부를 확인하세요.");
   const six = (inp.adj_area_now === "기타조정");
   // 가목: 2026-05-09까지 양도분은 중과 배제
   if (toDays(inp.transfer_date) <= toDays(HEAVY_GRACE_LAST))
@@ -725,12 +891,13 @@ function taxByRate(inp, taxBase, holdingYears, heavy) {
   if (inp.asset_type === "토지" || inp.asset_type === "건물") {
     const sf = holdingYears < 1 ? [50, 100] : (holdingYears < 2 ? [40, 100] : null);
     if (inp.is_nonbusiness_land) {
-      const nonBiz = progTax + mul(taxBase, NONBIZ_SUR);
+      let nonBiz = progTax + mul(taxBase, NONBIZ_SUR);
+      if (inp.is_designated_area) nonBiz += mul(taxBase, NONBIZ_SUR);  // 지정지역 추가 +10%p (§104④3호)
       const shortTax = sf ? mul(taxBase, sf) : 0;
       const pick = Math.max(nonBiz, shortTax);
       return { tax: roundDown(pick), progressive: pick === nonBiz,
         desc: pick === nonBiz
-          ? "비사업용토지 기본세율+10%p(" + (prog.ratePct + 10) + "%) · §104①8호"
+          ? "비사업용토지 기본세율+" + (inp.is_designated_area ? 20 : 10) + "%p(" + (prog.ratePct + (inp.is_designated_area ? 20 : 10)) + "%) · §104①8호" + (inp.is_designated_area ? "·§104④3호(지정지역)" : "")
           : "단기 " + sf[0] + "%(비사업용과 경합 · 큰 세액 채택)" };
     }
     if (sf) {
@@ -774,6 +941,39 @@ function splitByShare(total, sharePct) {
 // 환산취득가액 = 양도가액 × (취득당시 기준시가 / 양도당시 기준시가)
 // 이 경우 필요경비는 개산공제(취득당시 기준시가 × 3%)만 인정하되,
 // (환산취득가액 + 개산공제) < (자본적지출 + 양도비) 이면 후자를 선택할 수 있음(소령 §163⑥).
+/* 부담부증여 — 수증자가 인수한 채무액 상당분을 양도로 본다 (소득세법 §88 1호, 시행령 §159)
+   양도가액 = 상증법 평가액 × (채무액 / 증여가액)
+   취득가액 = §97①1 취득가액  × (채무액 / 증여가액)
+   ※ 채무액에는 인수한 대출 + 임대(전세)보증금이 포함된다 (상증법 시행령 §36①) */
+function burdenGift(inp) {
+  const warns = [];
+  const giftValue = inp.gift_total_value || 0;
+  const debt = (inp.assumed_loan || 0) + (inp.assumed_deposit || 0);
+  if (giftValue <= 0 || debt <= 0) {
+    warns.push("부담부증여: 증여재산 평가액과 인수 채무액(대출·전세보증금)을 모두 입력해야 계산됩니다.");
+    return { ok: false, ratio: 0, transfer: 0, warns: warns };
+  }
+  let effDebt = debt;
+  if (inp.taxable_asset_value > 0 && inp.taxable_asset_value < giftValue) {
+    // 과세대상·비과세대상 자산 혼재 시 채무액 안분 (시행령 §159②)
+    effDebt = Number((BigInt(debt) * BigInt(inp.taxable_asset_value)) / BigInt(giftValue));
+    warns.push("과세대상·비과세대상 자산이 섞여 있어 채무액을 안분했습니다(시행령 §159②): "
+      + comma(debt) + "원 × " + comma(inp.taxable_asset_value) + "/" + comma(giftValue) + " = " + comma(effDebt) + "원");
+  }
+  const ratio = Math.min(1, effDebt / giftValue);
+  const transfer = Number((BigInt(inp.gift_appraised_value || giftValue) * BigInt(effDebt)) / BigInt(giftValue));
+  warns.push("부담부증여 채무비율 " + (ratio * 100).toFixed(2) + "% (=채무액 " + comma(effDebt)
+    + "원 ÷ 증여가액 " + comma(giftValue) + "원) → 이 비율만큼 양도로 보아 증여자에게 양도소득세가 과세됩니다.");
+  if (inp.assumed_deposit > 0)
+    warns.push("전세·임대보증금 " + comma(inp.assumed_deposit) + "원도 채무액에 포함됩니다(상증법 시행령 §36①) — 대출이 없어도 양도소득세가 발생합니다.");
+  if (inp.gift_relation === "배우자직계") {
+    warns.push("⚠️ 배우자·직계존비속 간 부담부증여는 채무 인수가 <b>인수되지 않은 것으로 추정</b>됩니다(상증법 §47③). "
+      + "국가·지방자치단체·금융회사 채무는 해당 기관 확인서류, 그 외는 채무부담계약서·채권자확인서·담보설정·이자지급 증빙이 필요합니다(시행령 §36②→§10①).");
+  }
+  warns.push("부담부증여 양도분 예정신고기한은 양도일이 속한 달의 말일부터 <b>3개월</b>(일반 2개월 아님, 소득세법 §105①3호), 지방소득세는 여기에 +2개월입니다.");
+  return { ok: true, ratio: ratio, transfer: transfer, effDebt: effDebt, giftValue: giftValue, warns: warns };
+}
+
 function resolveAcquisition(inp, actualExpenses) {
   const warns = [];
   if (inp.acq_method === "환산") {
@@ -971,6 +1171,20 @@ function calculate(raw) {
     asset_type: raw.asset_type != null ? raw.asset_type : "주택",
     is_registered: raw.is_registered != null ? raw.is_registered : true,
     is_nonbusiness_land: !!raw.is_nonbusiness_land,
+    is_designated_area: !!raw.is_designated_area,
+    transaction_type: raw.transaction_type || "일반양도",
+    gift_total_value: raw.gift_total_value || 0,
+    gift_appraised_value: raw.gift_appraised_value || 0,
+    assumed_loan: raw.assumed_loan || 0,
+    assumed_deposit: raw.assumed_deposit || 0,
+    taxable_asset_value: raw.taxable_asset_value || 0,
+    gift_relation: raw.gift_relation || "기타",
+    special_case: raw.special_case || "없음",
+    new_house_acq_date: raw.new_house_acq_date || "",
+    relocation_5y: !!raw.relocation_5y,
+    merge_date: raw.merge_date || "",
+    rural_acq_date: raw.rural_acq_date || "",
+    reason_resolved_date: raw.reason_resolved_date || "",
     adj_area_now: raw.adj_area_now || "비조정",
     sales_contract_date: raw.sales_contract_date || "",
     land_permit_case: !!raw.land_permit_case,
@@ -1012,6 +1226,12 @@ function calculate(raw) {
     prior_basic_used_spouse: !!raw.prior_basic_used_spouse,
     reduction_rate: raw.reduction_rate || 0,
     reduction_type: raw.reduction_type || "없음",
+    prior_reduction_4y: raw.prior_reduction_4y || 0,
+    split_land_133_3: !!raw.split_land_133_3,
+    defer_mode: raw.defer_mode || "없음",
+    total_compensation: raw.total_compensation || 0,
+    land_compensation: raw.land_compensation || 0,
+    project_notice_date: raw.project_notice_date || "",
     reduction_cap: raw.reduction_cap || (raw.reduction_type === "공익" ? REDUCTION_CAP_PUBLIC : REDUCTION_CAP_FARM),
     farm_nts_exempt: !!raw.farm_nts_exempt,
     filing_status: raw.filing_status || "정상",
@@ -1049,7 +1269,19 @@ function calculate(raw) {
     warns.push("입력한 거주기간이 보유기간을 초과해 보유기간(" + holdingYears + "년)으로 제한했습니다.");
   }
 
-  const actualExpenses = necessaryExpenses(inp);
+  let actualExpenses = necessaryExpenses(inp);
+  // 부담부증여: 양도가액·취득가액·필요경비를 채무비율로 안분
+  let bg = null;
+  if (inp.transaction_type === "부담부증여") {
+    bg = burdenGift(inp);
+    warns.push.apply(warns, bg.warns);
+    if (bg.ok) {
+      inp.transfer_price = bg.transfer;
+      // 정수연산으로 정확 안분(반올림 오차 제거)
+      inp.acquisition_price = Number((BigInt(inp.acquisition_price) * BigInt(bg.effDebt)) / BigInt(bg.giftValue));
+      actualExpenses = Number((BigInt(actualExpenses) * BigInt(bg.effDebt)) / BigInt(bg.giftValue));
+    }
+  }
   const acq = resolveAcquisition(inp, actualExpenses);
   warns.push.apply(warns, acq.warns);
 
@@ -1083,10 +1315,22 @@ function calculate(raw) {
   let reduction = 0;
   let ntsSurtax = 0;
   if (inp.reduction_rate > 0 && calculatedTax > 0) {
-    const capped = Math.min(mul(calculatedTax, [inp.reduction_rate, 100]), inp.reduction_cap);
-    reduction = roundDown(capped);
-    if (mul(calculatedTax, [inp.reduction_rate, 100]) > inp.reduction_cap) {
-      warns.push("감면 종합한도(" + comma(inp.reduction_cap) + "원)를 초과해 한도까지만 감면했습니다(조특법 §133: 1과세기간 1억원, 5개 과세기간 2억원).");
+    const isPublic = (inp.reduction_type === "공익");
+    const cap1 = inp.reduction_cap;
+    const cap5 = isPublic ? REDUCTION_CAP5_PUBLIC : REDUCTION_CAP5_FARM;
+    const raw감면 = mul(calculatedTax, [inp.reduction_rate, 100]);
+    // 조특법 §133 — 과세기간별 한도 초과액과 5개 과세기간 한도 초과액 중 '큰 금액'을 감면 배제
+    const over1 = Math.max(0, raw감면 - cap1);
+    const over5 = Math.max(0, raw감면 + (inp.prior_reduction_4y || 0) - cap5);
+    reduction = roundDown(Math.max(0, raw감면 - Math.max(over1, over5)));
+    if (over1 > 0 || over5 > 0) {
+      warns.push("감면 한도 적용(조특법 §133" + (isPublic ? "②: 1과세기간 2억·5개 과세기간 3억" : "①: 1과세기간 1억·5개 과세기간 2억")
+        + ") — 감면가능액 " + comma(raw감면) + "원 중 과세기간 초과 " + comma(over1) + "원 / 5개 과세기간 초과 " + comma(over5)
+        + "원 가운데 큰 금액을 배제하여 " + comma(reduction) + "원만 감면했습니다.");
+    }
+    if (inp.split_land_133_3) {
+      warns.push("⚠️ 조특법 §133③ — 양도일 소급 1년 내 토지를 분할해 일부 양도했거나, 지분 양도 후 2년 내 나머지를 동일인·배우자에게 양도한 경우는 "
+        + "<b>1개 과세기간에 모두 양도한 것으로 간주</b>되어 과세기간 분산에 따른 한도 절세 효과가 사라집니다.");
     }
     // 농어촌특별세: 조특법 §66~§70(자경농지·농지대토 등) 감면은 농특세법 §4로 비과세
     const ntsExempt = inp.farm_nts_exempt || inp.reduction_type === "농지";
@@ -1095,7 +1339,29 @@ function calculate(raw) {
       warns.push("농지·자경 계열 감면(조특법 §66~§70)은 농어촌특별세가 비과세되어 부과하지 않았습니다.");
     if (ntsSurtax) warns.push("감면세액의 20%(" + comma(ntsSurtax) + "원)가 농어촌특별세로 부과됩니다.");
   }
-  const determinedTax = Math.max(0, calculatedTax - reduction);
+  // ── 대토보상 과세이연 (조특법 §77의2) — 감면 대신 이연을 선택한 경우 ──
+  let deferAmount = 0;
+  if (inp.defer_mode === "과세이연" && inp.total_compensation > 0 && inp.land_compensation > 0) {
+    const okDate = inp.transfer_date && toDays(inp.transfer_date) <= toDays(DEFER_DEADLINE);
+    const okHold = inp.project_notice_date
+      ? fullYears(inp.acquisition_date, inp.project_notice_date) >= 2 : false;
+    const incomeBase = sum("taxable_income");
+    const ratio = Math.min(1, inp.land_compensation / inp.total_compensation);
+    const deferBase = Number((BigInt(Math.max(0, incomeBase)) * BigInt(inp.land_compensation)) / BigInt(inp.total_compensation));
+    if (okDate && okHold) {
+      deferAmount = roundDown(mul(calculatedTax, [Math.round(ratio * 10000), 10000]));
+      warns.push("대토보상 과세이연(조특법 §77의2) 적용 — 대토보상비율 " + (ratio * 100).toFixed(2) + "%에 해당하는 "
+        + "양도소득금액 " + comma(deferBase) + "원(세액 약 " + comma(deferAmount) + "원)을 이번에 과세하지 않고 이연했습니다.");
+      warns.push("⚠️ 이연 시 대토를 양도할 때 '대토 취득가액 − 과세이연금액'을 취득가액으로 보며, <b>장기보유특별공제 보유기간은 대토 취득일부터 새로 기산</b>됩니다(종전 토지 보유기간 승계 안 됨).");
+      warns.push("⚠️ 대토 소유권이전등기 완료 후 <b>3년 이내 양도</b>하거나 전매금지 위반으로 현금보상 전환 시 과세이연금액 상당세액 + 이자상당액이 추징됩니다(2개월 내 신고·납부).");
+    } else {
+      warns.push("대토보상 과세이연 요건 미충족"
+        + (okHold ? "" : " · 사업인정고시일 소급 2년 이전 취득 필요(사업인정고시일 입력 확인)")
+        + (okDate ? "" : " · 적용기한 " + DEFER_DEADLINE + " 이내 양도 필요")
+        + " → 이연을 적용하지 않았습니다.");
+    }
+  }
+  const determinedTax = Math.max(0, calculatedTax - reduction - deferAmount);
 
   /* 개인지방소득세(양도소득분) — 지방세법 §103의3·§103의4
      과세표준에 소득세율의 1/10을 직접 적용하는 별개 세목(결과적으로 감면 전 산출세액의 10%).
@@ -1388,6 +1654,13 @@ function collect() {
     asset_type: $("asset_type").value,
     is_registered: $("is_registered").checked,
     is_nonbusiness_land: $("is_nonbusiness_land").checked,
+    is_designated_area: $("is_designated_area").checked,
+    special_case: $("special_case").value,
+    new_house_acq_date: $("new_house_acq_date").value,
+    relocation_5y: $("relocation_5y").checked,
+    merge_date: $("merge_date").value,
+    rural_acq_date: $("rural_acq_date").value,
+    reason_resolved_date: $("reason_resolved_date").value,
     adj_area_now: $("adj_area_now").value,
     sales_contract_date: $("sales_contract_date").value,
     land_permit_case: $("land_permit_case").checked,
@@ -1425,6 +1698,19 @@ function collect() {
     reduction_rate: parseInt($("reduction_rate").value || "0", 10),
     reduction_cap: val("reduction_cap") || DEFAULT_REDUCTION_CAP,
     reduction_type: $("reduction_type").value,
+    prior_reduction_4y: val("prior_reduction_4y"),
+    split_land_133_3: $("split_land_133_3").checked,
+    defer_mode: $("defer_mode").value,
+    project_notice_date: $("project_notice_date").value,
+    total_compensation: val("total_compensation"),
+    land_compensation: val("land_compensation"),
+    transaction_type: $("transaction_type").value,
+    gift_appraised_value: val("gift_appraised_value"),
+    gift_total_value: val("gift_total_value"),
+    assumed_loan: val("assumed_loan"),
+    assumed_deposit: val("assumed_deposit"),
+    taxable_asset_value: val("taxable_asset_value"),
+    gift_relation: $("gift_relation").value,
     farm_nts_exempt: $("farm_nts_exempt").checked,
     filing_status: $("filing_status").value,
     late_days: parseInt($("late_days").value || "0", 10),
